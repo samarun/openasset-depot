@@ -1,0 +1,12 @@
+.git
+.github
+target
+**/target
+desktop/node_modules
+desktop/dist
+sdk/typescript/node_modules
+sdk/typescript/dist
+deploy/.env
+dist
+artifacts
+*.log

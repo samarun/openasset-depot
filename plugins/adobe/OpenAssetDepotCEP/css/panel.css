@@ -1,0 +1,39 @@
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #f3f3f2;
+  background: #202124;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: #202124; }
+main { min-height: 100vh; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+header { display: grid; grid-template-columns: 34px 1fr 32px; align-items: center; gap: 10px; }
+.mark { width: 34px; height: 34px; display: grid; place-items: center; border: 1px solid #5e6268; font-size: 11px; font-weight: 700; }
+h1, h2, p { margin: 0; }
+h1 { font-size: 15px; font-weight: 650; }
+header p { color: #969ba3; font-size: 11px; margin-top: 2px; }
+h2 { font-size: 17px; overflow-wrap: anywhere; }
+.eyebrow { color: #8e949d; font-size: 10px; font-weight: 700; margin-bottom: 8px; }
+.asset { padding: 18px 0; border-block: 1px solid #36383d; }
+#file-path { color: #9da1a8; font-size: 11px; line-height: 1.45; margin-top: 6px; overflow-wrap: anywhere; }
+.status { display: inline-flex; margin-top: 14px; padding: 5px 8px; border: 1px solid #4c5159; font-size: 11px; }
+.status.good { color: #9bd5bc; border-color: #3c725e; }
+.status.warn { color: #f0c78a; border-color: #7c6240; }
+.status.bad { color: #efaaa3; border-color: #754743; }
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+button, input, textarea { font: inherit; }
+button { min-height: 34px; border: 1px solid #4a4d53; background: #2b2d31; color: #ededec; padding: 7px 10px; cursor: pointer; }
+button:hover { background: #34373c; }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: #d97746; border-color: #e38b5e; color: #151515; font-weight: 650; }
+button.primary:hover { background: #e28556; }
+button.icon { min-height: 30px; padding: 0; font-size: 18px; }
+button.link { min-height: auto; border: 0; background: transparent; padding: 0; color: #b7bbc2; text-align: left; }
+label { display: grid; gap: 6px; color: #aeb2b8; font-size: 11px; }
+input, textarea { width: 100%; border: 1px solid #484b51; background: #18191b; color: #f3f3f2; padding: 9px; resize: vertical; }
+.submit, .setup { display: grid; gap: 10px; }
+.setup { border: 1px solid #4b4e54; padding: 14px; }
+.setup h2 { font-size: 14px; }
+footer { margin-top: auto; padding-top: 12px; border-top: 1px solid #36383d; display: flex; justify-content: space-between; gap: 12px; color: #8e949d; font-size: 10px; }
+#message { text-align: right; overflow-wrap: anywhere; }
+.hidden { display: none; }

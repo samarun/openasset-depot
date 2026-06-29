@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ExtensionManifest Version="7.0"
+  ExtensionBundleId="com.openassetdepot.creativecloud"
+  ExtensionBundleVersion="0.1.0"
+  ExtensionBundleName="OpenAsset Depot">
+  <ExtensionList>
+    <Extension Id="com.openassetdepot.creativecloud.panel" Version="0.1.0" />
+  </ExtensionList>
+  <ExecutionEnvironment>
+    <HostList>
+      <Host Name="PHXS" Version="[22.0,99.9]" />
+      <Host Name="PPRO" Version="[15.0,99.9]" />
+      <Host Name="AEFT" Version="[18.0,99.9]" />
+      <Host Name="ILST" Version="[25.0,99.9]" />
+      <Host Name="IDSN" Version="[16.0,99.9]" />
+    </HostList>
+    <LocaleList><Locale Code="All" /></LocaleList>
+    <RequiredRuntimeList><RequiredRuntime Name="CSXS" Version="11.0" /></RequiredRuntimeList>
+  </ExecutionEnvironment>
+  <DispatchInfoList>
+    <Extension Id="com.openassetdepot.creativecloud.panel">
+      <DispatchInfo>
+        <Resources>
+          <MainPath>./index.html</MainPath>
+          <ScriptPath>./jsx/host.jsx</ScriptPath>
+          <CEFCommandLine>
+            <Parameter>--enable-nodejs</Parameter>
+            <Parameter>--mixed-context</Parameter>
+          </CEFCommandLine>
+        </Resources>
+        <Lifecycle><AutoVisible>true</AutoVisible></Lifecycle>
+        <UI>
+          <Type>Panel</Type>
+          <Menu>OpenAsset Depot</Menu>
+          <Geometry>
+            <Size><Width>360</Width><Height>560</Height></Size>
+            <MinSize><Width>300</Width><Height>420</Height></MinSize>
+            <MaxSize><Width>900</Width><Height>1200</Height></MaxSize>
+          </Geometry>
+          <Icons />
+        </UI>
+      </DispatchInfo>
+    </Extension>
+  </DispatchInfoList>
+</ExtensionManifest>

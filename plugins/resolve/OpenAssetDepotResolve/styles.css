@@ -1,0 +1,22 @@
+:root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #f4f3f1; background: #191a1c; }
+* { box-sizing: border-box; }
+body { margin: 0; background: #191a1c; }
+main { min-height: 100vh; padding: 18px; display: flex; flex-direction: column; gap: 18px; }
+header { display: grid; grid-template-columns: 36px 1fr 34px; align-items: center; gap: 11px; }
+.mark { width: 36px; height: 36px; border: 1px solid #5f6368; display: grid; place-items: center; font-size: 11px; font-weight: 700; }
+h1, h2, p { margin: 0; } h1 { font-size: 16px; } h2 { font-size: 18px; overflow-wrap: anywhere; }
+header p, .selection p { color: #92979f; font-size: 11px; margin-top: 3px; line-height: 1.45; overflow-wrap: anywhere; }
+.selection { padding: 20px 0; border-block: 1px solid #35383d; }
+.eyebrow { color: #898f97; font-size: 10px; font-weight: 700; margin-bottom: 8px; }
+.status { display: inline-flex; margin-top: 14px; border: 1px solid #50545a; padding: 5px 8px; color: #b7bbc0; font-size: 11px; }
+.status.good { color: #9bd6bd; border-color: #3e705d; } .status.warn { color: #edc68e; border-color: #75603f; } .status.bad { color: #efa9a3; border-color: #754844; }
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+button, input, textarea { font: inherit; } button { min-height: 35px; padding: 7px 10px; border: 1px solid #4a4e54; background: #292b2f; color: #efefed; cursor: pointer; }
+button:hover { background: #33363b; } button:disabled { opacity: .45; cursor: default; }
+button.primary { background: #c9653d; border-color: #df7b51; color: #151515; font-weight: 650; }
+button.icon { padding: 0; font-size: 18px; } button.link { min-height: auto; border: 0; padding: 0; background: transparent; color: #b7bbc0; }
+label { display: grid; gap: 6px; color: #adb1b7; font-size: 11px; } input, textarea { border: 1px solid #484b50; background: #121315; color: #f4f3f1; padding: 9px; width: 100%; }
+.setup, .submit { display: grid; gap: 10px; } .setup { padding: 14px; border: 1px solid #484b50; } .setup h2 { font-size: 14px; }
+.field-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+footer { margin-top: auto; padding-top: 12px; border-top: 1px solid #35383d; display: flex; justify-content: space-between; gap: 12px; color: #8e939b; font-size: 10px; }
+#message { text-align: right; overflow-wrap: anywhere; } .hidden { display: none; }

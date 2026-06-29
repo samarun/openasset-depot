@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenAsset Depot",
+  "version": "0.1.0",
+  "identifier": "org.openasset.depot",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "OpenAsset Depot",
+        "width": 1440,
+        "height": 940,
+        "minWidth": 1120,
+        "minHeight": 720,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' customprotocol: asset:; connect-src 'self' ipc: http://ipc.localhost http: https:; img-src 'self' asset: data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; frame-src 'none'; base-uri 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "externalBin": ["binaries/oad"],
+    "icon": [],
+    "category": "DeveloperTool",
+    "shortDescription": "Creative asset version control",
+    "longDescription": "OpenAsset Depot desktop client for creative production teams."
+  }
+}

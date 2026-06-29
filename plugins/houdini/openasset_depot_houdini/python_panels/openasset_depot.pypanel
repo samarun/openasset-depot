@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<pythonPanelDocument>
+  <interface name="openasset_depot" label="OpenAsset Depot">
+    <script><![CDATA[
+from openasset_depot_houdini.panel import create_interface
+
+def onCreateInterface():
+    return create_interface()
+]]></script>
+  </interface>
+</pythonPanelDocument>

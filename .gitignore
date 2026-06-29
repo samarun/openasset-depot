@@ -1,0 +1,12 @@
+/target/
+desktop/node_modules/
+desktop/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/binaries/
+/dist/
+/.env
+/deploy/.env
+/deploy/.env.production
+/.oad/
+data/
+*.oadtmp

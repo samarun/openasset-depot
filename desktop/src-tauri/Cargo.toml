@@ -1,0 +1,32 @@
+[package]
+name = "openasset-desktop"
+version = "0.1.0"
+description = "OpenAsset Depot desktop app"
+authors = ["OpenAsset Depot Contributors"]
+license = "Apache-2.0"
+edition = "2021"
+
+[lib]
+name = "openasset_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "openasset-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.0.4", features = [] }
+
+[dependencies]
+tauri = { version = "2.2.5", features = [] }
+tauri-plugin-dialog = "2"
+anyhow = "1"
+dirs = "6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "time"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[workspace]

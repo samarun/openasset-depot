@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:;" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenAsset Depot</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main>
+    <header><div class="mark">OD</div><div><h1>OpenAsset Depot</h1><p id="project">DaVinci Resolve</p></div><button id="refresh" class="icon" title="Refresh">&#x21bb;</button></header>
+    <section id="setup" class="setup hidden">
+      <h2>Connect a workspace</h2>
+      <div class="field-row"><input id="workspace-root" placeholder="/Studio/Project" /><button id="choose">Choose</button></div>
+      <label>oad executable<input id="cli-path" value="oad" /></label>
+      <button id="save-settings" class="primary">Use Workspace</button>
+    </section>
+    <section class="selection">
+      <div class="eyebrow">SELECTED MEDIA</div>
+      <h2 id="selection-title">No clips selected</h2>
+      <p id="selection-paths">Select one or more Media Pool clips stored in this workspace.</p>
+      <div id="status" class="status">Waiting for selection</div>
+    </section>
+    <section class="actions">
+      <button id="checkout" class="primary">Check Out</button><button id="add">Add to Depot</button>
+      <button id="sync">Sync Latest</button><button id="validate">Validate</button>
+      <button id="revert">Revert Intent</button>
+    </section>
+    <section class="submit">
+      <label>Submit note<textarea id="description" rows="3" placeholder="What changed in this editorial pass?"></textarea></label>
+      <button id="submit" class="primary">Submit Changes</button>
+    </section>
+    <footer><button id="settings-link" class="link">Workspace Settings</button><span id="message">Ready</span></footer>
+  </main>
+  <script src="renderer.js"></script>
+</body>
+</html>

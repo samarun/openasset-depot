@@ -1,0 +1,98 @@
+services:
+  openasset-api:
+    build:
+      context: ..
+      dockerfile: server/api/Dockerfile
+    environment:
+      OAD_BIND_ADDR: ${OAD_BIND_ADDR:-0.0.0.0:8080}
+      OAD_DATABASE_URL: ${OAD_DATABASE_URL:?set OAD_DATABASE_URL}
+      OAD_JWT_SECRET: ${OAD_JWT_SECRET:?set OAD_JWT_SECRET}
+      OAD_STORAGE_ROOT: ${OAD_STORAGE_ROOT:-/var/lib/openasset/objects}
+      OAD_MAX_UPLOAD_BYTES: ${OAD_MAX_UPLOAD_BYTES:-21474836480}
+      OAD_CHUNK_SIZE_BYTES: ${OAD_CHUNK_SIZE_BYTES:-4194304}
+      OAD_REQUEST_TIMEOUT_SECONDS: ${OAD_REQUEST_TIMEOUT_SECONDS:-1800}
+      OAD_CORS_ALLOWED_ORIGINS: ${OAD_CORS_ALLOWED_ORIGINS:-http://127.0.0.1:5173,http://localhost:5173,tauri://localhost,http://tauri.localhost}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${OAD_API_PORT:-8080}:8080"
+    volumes:
+      - openasset_objects:/var/lib/openasset/objects
+      - ./config:/etc/openasset:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-openasset}
+      POSTGRES_USER: ${POSTGRES_USER:-openasset}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    ports:
+      - "${OAD_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - openasset_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-openasset} -d ${POSTGRES_DB:-openasset}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    profiles: ["s3-future"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-openasset}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+    ports:
+      - "${OAD_MINIO_API_PORT:-9000}:9000"
+      - "${OAD_MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - openasset_minio:/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    profiles: ["future"]
+    restart: unless-stopped
+
+  openasset-worker:
+    build:
+      context: ..
+      dockerfile: server/api/Dockerfile
+    profiles: ["future"]
+    environment:
+      OAD_BIND_ADDR: ${OAD_BIND_ADDR:-0.0.0.0:8080}
+      OAD_DATABASE_URL: ${OAD_DATABASE_URL:?set OAD_DATABASE_URL}
+      OAD_JWT_SECRET: ${OAD_JWT_SECRET:?set OAD_JWT_SECRET}
+      OAD_STORAGE_ROOT: ${OAD_STORAGE_ROOT:-/var/lib/openasset/objects}
+      OAD_MAX_UPLOAD_BYTES: ${OAD_MAX_UPLOAD_BYTES:-21474836480}
+      OAD_CHUNK_SIZE_BYTES: ${OAD_CHUNK_SIZE_BYTES:-4194304}
+      OAD_REQUEST_TIMEOUT_SECONDS: ${OAD_REQUEST_TIMEOUT_SECONDS:-1800}
+      OAD_CORS_ALLOWED_ORIGINS: ${OAD_CORS_ALLOWED_ORIGINS:-http://127.0.0.1:5173,http://localhost:5173,tauri://localhost,http://tauri.localhost}
+    command: ["openasset-api"]
+    restart: "no"
+
+  openasset-web:
+    build:
+      context: ..
+      dockerfile: desktop/Dockerfile
+    depends_on:
+      openasset-api:
+        condition: service_healthy
+    ports:
+      - "${OAD_WEB_PORT:-5173}:80"
+    restart: unless-stopped
+
+volumes:
+  openasset_postgres:
+  openasset_objects:
+  openasset_minio:

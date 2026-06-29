@@ -1,0 +1,16 @@
+{
+  "name": "com.openasset.depot",
+  "version": "0.1.0",
+  "displayName": "OpenAsset Depot",
+  "description": "Production asset version control, locking, sync, and submit workflows.",
+  "unity": "2022.3",
+  "author": {
+    "name": "OpenAsset Depot Contributors"
+  },
+  "keywords": [
+    "version-control",
+    "source-control",
+    "assets",
+    "locking"
+  ]
+}
