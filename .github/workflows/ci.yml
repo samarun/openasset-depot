@@ -101,6 +101,13 @@ jobs:
           workspaces: desktop/src-tauri
       - run: npm ci
         working-directory: desktop
+      - name: Prepare CLI sidecar for Tauri checks
+        run: |
+          set -euo pipefail
+          target="$(rustc -vV | awk '/^host:/ { print $2 }')"
+          cargo build --release -p oad
+          mkdir -p desktop/src-tauri/binaries
+          cp target/release/oad "desktop/src-tauri/binaries/oad-${target}"
       - run: cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib
       - run: cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: ./scripts/build-desktop-release.sh
