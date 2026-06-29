@@ -8,5 +8,5 @@ desktop/src-tauri/binaries/
 /deploy/.env
 /deploy/.env.production
 /.oad/
-data/
+/data/
 *.oadtmp
