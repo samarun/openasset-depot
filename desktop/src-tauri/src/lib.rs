@@ -7,6 +7,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             integration::run_oad_integration,
+            workspaces::configure_cli_session,
+            workspaces::clear_cli_session,
             workspaces::initialize_workspace,
             workspaces::remove_workspace_metadata
         ])

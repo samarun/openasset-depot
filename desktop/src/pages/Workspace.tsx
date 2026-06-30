@@ -1,5 +1,5 @@
 import { Folder, FolderSearch, FolderTree, Grid2X2, List, PanelRight, Plus, RotateCcw, UploadCloud } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { AssetCard } from "../components/AssetCard";
 import { EmptyState } from "../components/EmptyState";
 import { FileInspector } from "../components/FileInspector";
@@ -11,16 +11,19 @@ interface WorkspaceProps {
   selectedFile?: AssetFile;
   onSelectFile: (file: AssetFile) => void;
   onSync: () => void;
-  onChooseFiles: () => void;
+  onChooseFiles: (files?: File[]) => void;
+  browserMode?: boolean;
   onLock: (file: AssetFile) => void;
   onUnlock: (file: AssetFile) => void;
   onRevert: (file: AssetFile) => void;
   onDelete: (file: AssetFile) => void;
   onSubmit: () => void;
+  onReview: (file: AssetFile) => void;
   onHistory: () => void;
   hasMoreFiles?: boolean;
   onLoadMore?: () => void;
   busy?: boolean;
+  loadPreview?: (file: AssetFile) => Promise<string | undefined>;
 }
 
 export function Workspace({
@@ -29,18 +32,22 @@ export function Workspace({
   onSelectFile,
   onSync,
   onChooseFiles,
+  browserMode = false,
   onLock,
   onUnlock,
   onRevert,
   onDelete,
   onSubmit,
+  onReview,
   onHistory,
   hasMoreFiles = false,
   onLoadMore,
   busy = false,
+  loadPreview,
 }: WorkspaceProps) {
   const [assetView, setAssetView] = useState<"artist" | "technical">("artist");
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
   const folders = useMemo(() => Array.from(new Set(files.map((file) => file.path.split("/")[0]))), [files]);
 
   function inspectFile(file: AssetFile) {
@@ -93,17 +100,30 @@ export function Workspace({
         <div className="button-row toolbar-row">
           <button className="primary-button" type="button" onClick={onSync} disabled={busy}>
             <UploadCloud size={16} />
-            Sync Latest
+            {browserMode ? "Refresh Depot" : "Sync Latest"}
           </button>
           <button
             className="secondary-button"
             type="button"
-            onClick={onChooseFiles}
+            onClick={() => browserMode ? fileInput.current?.click() : onChooseFiles()}
             disabled={busy}
           >
             <Plus size={16} />
-            Add Files
+            {browserMode ? "Upload Files" : "Add Files"}
           </button>
+          {browserMode && (
+            <input
+              ref={fileInput}
+              className="browser-file-input"
+              type="file"
+              multiple
+              onChange={(event) => {
+                const selected = Array.from(event.target.files ?? []);
+                if (selected.length > 0) onChooseFiles(selected);
+                event.target.value = "";
+              }}
+            />
+          )}
           <button
             className="ghost-button"
             type="button"
@@ -133,7 +153,7 @@ export function Workspace({
             action={(
               <button className="primary-button" type="button" onClick={onSync} disabled={busy}>
                 <UploadCloud size={16} />
-                Refresh Workspace
+                {browserMode ? "Refresh Depot" : "Refresh Workspace"}
               </button>
             )}
           />
@@ -145,6 +165,7 @@ export function Workspace({
                 file={file}
                 selected={selectedFile?.id === file.id}
                 onSelect={inspectFile}
+                loadPreview={loadPreview}
               />
             ))}
           </div>
@@ -166,12 +187,14 @@ export function Workspace({
         open={inspectorOpen}
         onClose={() => setInspectorOpen(false)}
         onSubmit={onSubmit}
+        onReview={onReview}
         onHistory={onHistory}
         onLock={onLock}
         onUnlock={onUnlock}
         onRevert={onRevert}
         onDelete={onDelete}
         busy={busy}
+        loadPreview={loadPreview}
       />
     </main>
   );

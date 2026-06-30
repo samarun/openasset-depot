@@ -34,6 +34,11 @@ class OpenAssetPanel(QtWidgets.QWidget):
         self.status.setWordWrap(True)
         self.status.setMinimumHeight(42)
         layout.addWidget(self.status)
+        self.progress = QtWidgets.QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setTextVisible(True)
+        self.progress.hide()
+        layout.addWidget(self.progress)
 
         row = QtWidgets.QHBoxLayout()
         self.refresh_button = self._button("Refresh", self.refresh)
@@ -77,21 +82,24 @@ class OpenAssetPanel(QtWidgets.QWidget):
         self._with_scene(
             lambda bridge, path: bridge.status([path]),
             lambda values: self._status_message(values[0]),
+            "Refreshing status",
         )
 
     def checkout_scene(self) -> None:
         self._with_scene(
             lambda bridge, path: bridge.checkout(path, "Editing in Houdini"),
             lambda result: f"Checked out {result['path']}",
+            "Checking out HIP",
         )
 
     def checkout_hda(self) -> None:
         try:
             path = runtime.selected_hda_path()
-            bridge = runtime.client(path)
+            bridge = runtime.client(path, self._progress_from_worker)
             self._run(
                 lambda: bridge.checkout(path, "Editing HDA in Houdini"),
                 lambda result: f"Checked out {result['path']}",
+                "Checking out HDA",
             )
         except BridgeError as error:
             self._set_error(str(error))
@@ -100,12 +108,14 @@ class OpenAssetPanel(QtWidgets.QWidget):
         self._with_scene(
             lambda bridge, _path: bridge.sync(timeout_seconds=1800),
             lambda result: f"Synced {result.get('synced_count', 0)} file(s)",
+            "Syncing latest files",
         )
 
     def validate(self) -> None:
         self._with_scene(
             lambda bridge, path: bridge.validate([path], "Houdini"),
             self._validation_message,
+            "Validating scene",
         )
 
     def submit(self) -> None:
@@ -116,6 +126,7 @@ class OpenAssetPanel(QtWidgets.QWidget):
         self._with_scene(
             lambda bridge, _path: bridge.submit(description, timeout_seconds=1800),
             lambda result: f"Submitted {len(result.get('revisions', []))} file(s)",
+            "Submitting changes",
         )
 
     def revert(self) -> None:
@@ -129,37 +140,51 @@ class OpenAssetPanel(QtWidgets.QWidget):
         self._with_scene(
             lambda bridge, path: bridge.revert(path),
             lambda result: f"Reverted checkout for {result['path']}",
+            "Reverting checkout",
         )
 
-    def _with_scene(self, operation, success) -> None:
+    def _with_scene(self, operation, success, label) -> None:
         try:
             path = runtime.scene_path()
-            bridge = runtime.client(path)
-            self._run(lambda: operation(bridge, path), success)
+            bridge = runtime.client(path, self._progress_from_worker)
+            self._run(lambda: operation(bridge, path), success, label)
         except BridgeError as error:
             self._set_error(str(error))
 
-    def _run(self, operation, success) -> None:
+    def _run(self, operation, success, label) -> None:
         if self._busy:
             self._set_error("Another OpenAsset operation is already running.")
             return
         self._set_busy(True)
-        self.status.setText("Working...")
+        self._set_progress_value(2, label)
 
         def completed(result: Any) -> None:
             if not self.isVisible():
                 return
             self._set_busy(False)
             self.status.setStyleSheet("")
-            self.status.setText(success(result))
+            self._set_progress_value(100, success(result))
 
         def failed(error: Exception) -> None:
             if not self.isVisible():
                 return
             self._set_busy(False)
+            self.progress.hide()
             self._set_error(str(error))
 
         runtime.run_operation(operation, on_success=completed, on_error=failed)
+
+    def _progress_from_worker(self, progress) -> None:
+        runtime.defer(lambda progress=progress: self._set_progress_value(progress.completed, progress.message))
+
+    def _set_progress_value(self, value: int, message: str) -> None:
+        if not self.isVisible():
+            return
+        self.progress.show()
+        self.progress.setValue(max(0, min(100, int(value))))
+        self.progress.setFormat(f"{int(value)}%")
+        self.status.setStyleSheet("")
+        self.status.setText(message)
 
     def _set_busy(self, busy: bool) -> None:
         self._busy = busy

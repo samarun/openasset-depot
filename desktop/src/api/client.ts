@@ -2,6 +2,7 @@ import type {
   AdapterDefinition,
   AdapterFileInput,
   AdapterValidationResponse,
+  ChangelistResponse,
   CreateWorkspaceInput,
   DeleteWorkspaceResponse,
   Depot,
@@ -14,12 +15,18 @@ import type {
   LockPageResponse,
   PreviewGeneration,
   ProjectDetection,
+  CreateReviewCommentInput,
+  ReviewComment,
   Stream,
+  SignupStatus,
+  SubmitResponse,
   SyncPlanEntry,
   UserSession,
+  UserAccount,
   ValidationResponse,
   Workspace,
 } from "../types/domain";
+import { createUuid } from "../utils/uuid";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -45,6 +52,12 @@ interface HealthResponse {
   status: string;
 }
 
+export interface BrowserUpload {
+  path: string;
+  file: File;
+  action: "add" | "edit";
+}
+
 export class OpenAssetApiClient {
   private readonly baseUrl: string;
   private readonly fetcher: typeof fetch;
@@ -67,6 +80,25 @@ export class OpenAssetApiClient {
     };
   }
 
+  signupStatus(): Promise<SignupStatus> {
+    return this.request<SignupStatus>("/api/auth/signup");
+  }
+
+  signup(username: string, password: string, displayName?: string): Promise<UserAccount> {
+    return this.request<UserAccount>("/api/auth/signup", {
+      method: "POST",
+      body: JSON.stringify({ username, password, display_name: displayName }),
+    });
+  }
+
+  changePassword(token: string, currentPassword: string, newPassword: string): Promise<{ changed: boolean }> {
+    return this.request<{ changed: boolean }>("/api/auth/change-password", {
+      method: "POST",
+      token,
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    });
+  }
+
   ready(): Promise<HealthResponse> {
     return this.request<HealthResponse>("/ready");
   }
@@ -79,7 +111,7 @@ export class OpenAssetApiClient {
     return this.request<Depot>("/api/depots", {
       method: "POST",
       token,
-      headers: { "idempotency-key": crypto.randomUUID() },
+      headers: { "idempotency-key": createUuid() },
       body: JSON.stringify({ name, description }),
     });
   }
@@ -88,7 +120,7 @@ export class OpenAssetApiClient {
     return this.request<Stream>("/api/streams", {
       method: "POST",
       token,
-      headers: { "idempotency-key": crypto.randomUUID() },
+      headers: { "idempotency-key": createUuid() },
       body: JSON.stringify({ name, depot }),
     });
   }
@@ -101,8 +133,35 @@ export class OpenAssetApiClient {
     return this.request<Workspace>("/api/workspaces", {
       method: "POST",
       token,
-      headers: { "idempotency-key": crypto.randomUUID() },
+      headers: { "idempotency-key": createUuid() },
       body: JSON.stringify(input),
+    });
+  }
+
+  createChangelist(token: string, workspaceId: string, description: string): Promise<ChangelistResponse> {
+    return this.request<ChangelistResponse>("/api/changelists", {
+      method: "POST",
+      token,
+      headers: { "idempotency-key": createUuid() },
+      body: JSON.stringify({ workspace_id: workspaceId, description }),
+    });
+  }
+
+  submitChangelist(
+    token: string,
+    workspaceId: string,
+    changelistId: string,
+    uploads: BrowserUpload[],
+  ): Promise<SubmitResponse> {
+    const form = new FormData();
+    form.set("workspace_id", workspaceId);
+    for (const upload of uploads) {
+      form.append("file", upload.file, upload.path);
+    }
+    return this.request<SubmitResponse>(`/api/changelists/${changelistId}/submit`, {
+      method: "POST",
+      token,
+      body: form,
     });
   }
 
@@ -170,6 +229,104 @@ export class OpenAssetApiClient {
         limit,
         include_current: true,
       }),
+    });
+  }
+
+  async downloadPreview(
+    token: string,
+    workspaceId: string,
+    path: string,
+    revisionNumber: number,
+  ): Promise<Blob | undefined> {
+    const query = new URLSearchParams({
+      workspace_id: workspaceId,
+      path,
+      revision_number: String(revisionNumber),
+    });
+    const response = await this.fetcher(`${this.baseUrl}/api/files/preview?${query}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (response.status === 404) return undefined;
+    if (!response.ok) {
+      throw new ApiError(`Preview request failed with ${response.status}`, response.status);
+    }
+    return response.blob();
+  }
+
+  async downloadReviewMedia(
+    token: string,
+    workspaceId: string,
+    path: string,
+    revisionNumber: number,
+  ): Promise<Blob | undefined> {
+    const query = new URLSearchParams({
+      workspace_id: workspaceId,
+      path,
+      revision_number: String(revisionNumber),
+    });
+    const response = await this.fetcher(`${this.baseUrl}/api/reviews/media?${query}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (response.status === 404) return undefined;
+    if (!response.ok) {
+      throw new ApiError(`Review media request failed with ${response.status}`, response.status);
+    }
+    return response.blob();
+  }
+
+  async downloadReviewProxy(
+    token: string,
+    workspaceId: string,
+    path: string,
+    revisionNumber: number,
+  ): Promise<Blob | undefined> {
+    const query = new URLSearchParams({
+      workspace_id: workspaceId,
+      path,
+      revision_number: String(revisionNumber),
+    });
+    const response = await this.fetcher(`${this.baseUrl}/api/reviews/proxy?${query}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (response.status === 404) return undefined;
+    if (!response.ok) {
+      throw new ApiError(`Review proxy request failed with ${response.status}`, response.status);
+    }
+    return response.blob();
+  }
+
+  listReviewComments(
+    token: string,
+    workspaceId: string,
+    path: string,
+    revisionNumber: number,
+  ): Promise<ReviewComment[]> {
+    const query = new URLSearchParams({
+      workspace_id: workspaceId,
+      path,
+      revision_number: String(revisionNumber),
+    });
+    return this.request<ReviewComment[]>(`/api/reviews/comments?${query}`, { token });
+  }
+
+  createReviewComment(token: string, input: CreateReviewCommentInput): Promise<ReviewComment> {
+    return this.request<ReviewComment>("/api/reviews/comments", {
+      method: "POST",
+      token,
+      body: JSON.stringify(input),
+    });
+  }
+
+  resolveReviewComment(
+    token: string,
+    workspaceId: string,
+    commentId: string,
+    resolved = true,
+  ): Promise<ReviewComment> {
+    return this.request<ReviewComment>(`/api/reviews/comments/${commentId}/resolve`, {
+      method: "POST",
+      token,
+      body: JSON.stringify({ workspace_id: workspaceId, resolved }),
     });
   }
 
@@ -339,7 +496,9 @@ export class OpenAssetApiClient {
     options: RequestInit & { token?: string } = {},
   ): Promise<T> {
     const headers = new Headers(options.headers);
-    headers.set("content-type", "application/json");
+    if (!(options.body instanceof FormData)) {
+      headers.set("content-type", "application/json");
+    }
     if (options.token) {
       headers.set("authorization", `Bearer ${options.token}`);
     }
@@ -369,6 +528,9 @@ export class OpenAssetApiClient {
 
 export function friendlyApiError(error: unknown): string {
   if (error instanceof ApiError) {
+    if (error.status === 401 && error.message.toLowerCase().includes("current password")) {
+      return error.message;
+    }
     if (error.status === 401) return "Sign in again to continue.";
     if (error.status === 409) return humanConflictMessage(error.message);
     return error.message;

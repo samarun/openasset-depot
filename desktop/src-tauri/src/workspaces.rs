@@ -34,6 +34,21 @@ pub struct RemoveWorkspaceResult {
     pub root: PathBuf,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigureCliSessionRequest {
+    pub server_url: String,
+    pub token: String,
+    pub username: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CliSessionConfig {
+    server_url: String,
+    token: Option<String>,
+    username: Option<String>,
+}
+
 #[derive(Serialize)]
 struct EmptyFileMap {
     files: std::collections::BTreeMap<String, serde_json::Value>,
@@ -55,6 +70,72 @@ pub async fn remove_workspace_metadata(
     remove_workspace_inner(request)
         .await
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn configure_cli_session(request: ConfigureCliSessionRequest) -> Result<(), String> {
+    configure_cli_session_inner(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_cli_session() -> Result<(), String> {
+    clear_cli_session_inner()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn configure_cli_session_inner(request: ConfigureCliSessionRequest) -> anyhow::Result<()> {
+    let server_url = request.server_url.trim().trim_end_matches('/');
+    if (!server_url.starts_with("https://") && !server_url.starts_with("http://"))
+        || server_url.len() > 2048
+    {
+        anyhow::bail!("server URL must use HTTP or HTTPS");
+    }
+    if request.token.trim().is_empty() || request.token.len() > 16_384 {
+        anyhow::bail!("session token is invalid");
+    }
+    validate_identifier(&request.username, "username")?;
+    write_cli_session(&CliSessionConfig {
+        server_url: server_url.to_string(),
+        token: Some(request.token),
+        username: Some(request.username),
+    })
+    .await
+}
+
+async fn clear_cli_session_inner() -> anyhow::Result<()> {
+    let path = cli_config_path()?;
+    if !path.exists() {
+        return Ok(());
+    }
+    let mut config: CliSessionConfig = read_json(&path).await?;
+    config.token = None;
+    write_cli_session(&config).await
+}
+
+async fn write_cli_session(config: &CliSessionConfig) -> anyhow::Result<()> {
+    let path = cli_config_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+    write_json_atomic(&path, config).await?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(&path).await?.permissions();
+        permissions.set_mode(0o600);
+        fs::set_permissions(&path, permissions).await?;
+    }
+    Ok(())
+}
+
+fn cli_config_path() -> anyhow::Result<PathBuf> {
+    Ok(dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("home directory is unavailable"))?
+        .join(".oad")
+        .join("config.json"))
 }
 
 async fn initialize_workspace_inner(
@@ -180,6 +261,16 @@ mod tests {
         assert!(root.join(".oad/workspace.json").is_file());
         assert!(root.join(".oad/state.json").is_file());
         assert!(root.join(".oad/pending.json").is_file());
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_cli_session_values() {
+        let request = ConfigureCliSessionRequest {
+            server_url: "file:///tmp/depot".to_string(),
+            token: "token".to_string(),
+            username: "artist".to_string(),
+        };
+        assert!(configure_cli_session_inner(request).await.is_err());
     }
 
     #[tokio::test]

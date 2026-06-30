@@ -11,7 +11,7 @@ use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 use tokio::{
     fs,
-    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
 use uuid::Uuid;
 
@@ -168,6 +168,52 @@ impl LocalObjectStore {
                     }
                     yield Bytes::copy_from_slice(&buffer[..read]);
                 }
+            }
+        })
+    }
+
+    pub fn stream_blob_range(
+        &self,
+        blob_hash: String,
+        start: u64,
+        end_inclusive: u64,
+    ) -> Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static>> {
+        let store = self.clone();
+        Box::pin(try_stream! {
+            let manifest = store.read_manifest(&blob_hash).await.map_err(std::io::Error::other)?;
+            let mut chunk_start = 0u64;
+            let mut remaining = end_inclusive.saturating_sub(start).saturating_add(1);
+            let mut buffer = vec![0u8; 64 * 1024];
+            for chunk in manifest.chunks {
+                if remaining == 0 {
+                    break;
+                }
+                let chunk_end = chunk_start + chunk.size_bytes;
+                if chunk_end <= start {
+                    chunk_start = chunk_end;
+                    continue;
+                }
+                if chunk_start > end_inclusive {
+                    break;
+                }
+                let offset = start.saturating_sub(chunk_start);
+                let mut file = fs::File::open(store.chunk_path(&chunk.hash)).await?;
+                if offset > 0 {
+                    file.seek(std::io::SeekFrom::Start(offset)).await?;
+                }
+                loop {
+                    if remaining == 0 {
+                        break;
+                    }
+                    let read_limit = buffer.len().min(remaining as usize);
+                    let read = file.read(&mut buffer[..read_limit]).await?;
+                    if read == 0 {
+                        break;
+                    }
+                    remaining -= read as u64;
+                    yield Bytes::copy_from_slice(&buffer[..read]);
+                }
+                chunk_start = chunk_end;
             }
         })
     }

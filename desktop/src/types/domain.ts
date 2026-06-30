@@ -26,6 +26,18 @@ export interface UserSession {
   isAdmin: boolean;
 }
 
+export interface SignupStatus {
+  enabled: boolean;
+  first_user: boolean;
+}
+
+export interface UserAccount {
+  id: string;
+  username: string;
+  display_name?: string | null;
+  is_admin: boolean;
+}
+
 export interface Depot {
   id: string;
   name: string;
@@ -110,6 +122,8 @@ export interface SyncPlanEntry {
   blob_hash: string;
   size_bytes: number;
   deleted: boolean;
+  preview_available?: boolean;
+  review_proxy_available?: boolean;
 }
 
 export interface FileHistoryEntry {
@@ -121,9 +135,81 @@ export interface FileHistoryEntry {
   submitted_at: string;
 }
 
+export type AnnotationTool = "pen" | "highlighter" | "rectangle" | "arrow";
+
+export interface AnnotationPoint {
+  x: number;
+  y: number;
+}
+
+export interface ReviewAnnotation {
+  tool: AnnotationTool;
+  color: string;
+  width: number;
+  points: AnnotationPoint[];
+}
+
+export interface ReviewAnnotationPayload {
+  marks: ReviewAnnotation[];
+}
+
+export interface ReviewComment {
+  id: string;
+  path: string;
+  revision_number: number;
+  author_user_id: string;
+  author: string;
+  parent_comment_id?: string | null;
+  body: string;
+  timecode_ms?: number | null;
+  frame_number?: number | null;
+  annotation?: ReviewAnnotationPayload | null;
+  resolved_at?: string | null;
+  resolved_by?: string | null;
+  created_at: string;
+}
+
+export interface CreateReviewCommentInput {
+  workspace_id: string;
+  path: string;
+  revision_number: number;
+  body: string;
+  timecode_ms?: number;
+  frame_number?: number;
+  parent_comment_id?: string;
+  annotation?: ReviewAnnotationPayload;
+}
+
+export interface ReviewMedia {
+  blob: Blob;
+  contentType: string;
+  source: "asset" | "preview";
+}
+
 export interface FileOperationResponse {
   path: string;
   action: "add" | "edit" | "delete" | "revert";
+}
+
+export interface ChangelistResponse {
+  id: string;
+  user_id: string;
+  workspace_id: string;
+  description: string;
+  status: string;
+  created_at: string;
+}
+
+export interface SubmittedRevision {
+  path: string;
+  revision_number: number;
+  blob_hash: string;
+  size_bytes: number;
+}
+
+export interface SubmitResponse {
+  changelist_id: string;
+  revisions: SubmittedRevision[];
 }
 
 export interface AdapterDefinition {
@@ -206,6 +292,8 @@ export interface AssetFile {
   owner?: string;
   statuses: StatusKind[];
   previewTone: "image" | "model" | "audio" | "scene" | "document";
+  previewAvailable?: boolean;
+  reviewProxyAvailable?: boolean;
   dependencies: string[];
   changelist?: string;
   source: SourceKind;

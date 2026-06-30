@@ -3,17 +3,20 @@ from .client import (
     BridgeError,
     BridgeProtocolError,
     FileStatus,
+    OperationProgress,
     WorkspaceContext,
     find_workspace,
 )
-from .tasks import TaskRunner
+from .tasks import CallbackQueue, TaskRunner
 
 __all__ = [
     "BridgeClient",
     "BridgeError",
     "BridgeProtocolError",
     "FileStatus",
+    "OperationProgress",
     "WorkspaceContext",
+    "CallbackQueue",
     "TaskRunner",
     "find_workspace",
 ]

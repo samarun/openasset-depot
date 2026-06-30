@@ -36,6 +36,8 @@ pub struct SyncPlanEntry {
     pub blob_hash: String,
     pub size_bytes: i64,
     pub deleted: bool,
+    pub preview_available: bool,
+    pub review_proxy_available: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,9 +113,13 @@ pub async fn plan_sync(
     let limit = req.limit.unwrap_or(1_000).clamp(1, 5_000);
     let rows = sqlx::query(
         r#"
-        SELECT f.depot_path, f.head_revision, fr.blob_hash, fr.size_bytes, f.deleted
+        SELECT f.depot_path, f.head_revision, fr.blob_hash, fr.size_bytes, f.deleted,
+               (rp.revision_id IS NOT NULL) AS preview_available,
+               (rrp.revision_id IS NOT NULL) AS review_proxy_available
         FROM files f
         JOIN file_revisions fr ON fr.file_id = f.id AND fr.revision_number = f.head_revision
+        LEFT JOIN revision_previews rp ON rp.revision_id = fr.id
+        LEFT JOIN revision_review_proxies rrp ON rrp.revision_id = fr.id
         LEFT JOIN workspace_file_states wfs
           ON wfs.workspace_id = $2 AND wfs.depot_path = f.depot_path
         WHERE f.stream_id = $1
@@ -144,6 +150,8 @@ pub async fn plan_sync(
                 blob_hash: row.get("blob_hash"),
                 size_bytes: row.get("size_bytes"),
                 deleted: row.get("deleted"),
+                preview_available: row.get("preview_available"),
+                review_proxy_available: row.get("review_proxy_available"),
             })
             .collect(),
     ))

@@ -4,7 +4,7 @@ from . import runtime, ui
 
 
 def initializePlugin(plugin_object):
-    om.MFnPlugin(plugin_object, "OpenAsset Depot Contributors", "0.1.0", "Any")
+    om.MFnPlugin(plugin_object, "OpenAsset Depot Contributors", "0.1.2", "Any")
     ui.install_menu()
 
 

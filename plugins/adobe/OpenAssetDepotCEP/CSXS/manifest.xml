@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ExtensionManifest Version="7.0"
   ExtensionBundleId="com.openassetdepot.creativecloud"
-  ExtensionBundleVersion="0.1.0"
+  ExtensionBundleVersion="0.1.2"
   ExtensionBundleName="OpenAsset Depot">
   <ExtensionList>
-    <Extension Id="com.openassetdepot.creativecloud.panel" Version="0.1.0" />
+    <Extension Id="com.openassetdepot.creativecloud.panel" Version="0.1.2" />
   </ExtensionList>
   <ExecutionEnvironment>
     <HostList>

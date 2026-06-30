@@ -13,6 +13,7 @@ MENU = "openassetDepotMenu"
 STATUS = "openassetDepotStatus"
 DESCRIPTION = "openassetDepotDescription"
 ACTION_COLUMN = "openassetDepotActions"
+PROGRESS = "openassetDepotProgress"
 _script_jobs = []
 
 
@@ -23,6 +24,7 @@ def show() -> None:
     cmds.columnLayout(adjustableColumn=True, rowSpacing=8, columnAttach=("both", 12))
     cmds.text(label="CURRENT SCENE", align="left", font="smallBoldLabelFont")
     cmds.text(STATUS, label="Save the scene to begin", align="left", wordWrap=True, height=42)
+    cmds.progressBar(PROGRESS, maxValue=100, progress=0, height=8, visible=False)
     cmds.separator(style="in")
     cmds.columnLayout(ACTION_COLUMN, adjustableColumn=True, rowSpacing=6)
     cmds.button(label="Refresh Status", command=lambda *_: refresh())
@@ -72,6 +74,7 @@ def refresh() -> None:
     _run(
         lambda bridge, path: bridge.status([path]),
         lambda values: _status_message(values[0]),
+        "Refreshing status",
     )
 
 
@@ -79,6 +82,7 @@ def checkout() -> None:
     _run(
         lambda bridge, path: bridge.checkout(path, "Editing in Maya"),
         lambda result: f"Checked out {result['path']}",
+        "Checking out scene",
     )
 
 
@@ -86,6 +90,7 @@ def sync() -> None:
     _run(
         lambda bridge, _path: bridge.sync(timeout_seconds=1800),
         lambda result: f"Synced {result.get('synced_count', 0)} file(s)",
+        "Syncing latest files",
     )
 
 
@@ -93,6 +98,7 @@ def validate() -> None:
     _run(
         lambda bridge, path: bridge.validate([path], "Maya"),
         _validation_message,
+        "Validating scene",
     )
 
 
@@ -104,6 +110,7 @@ def submit() -> None:
     _run(
         lambda bridge, _path: bridge.submit(description, timeout_seconds=1800),
         lambda result: f"Submitted {len(result.get('revisions', []))} file(s)",
+        "Submitting changes",
     )
 
 
@@ -120,6 +127,7 @@ def revert() -> None:
     _run(
         lambda bridge, path: bridge.revert(path),
         lambda result: f"Reverted checkout for {result['path']}",
+        "Reverting checkout",
     )
 
 
@@ -168,15 +176,26 @@ def set_busy(busy: bool) -> None:
         cmds.columnLayout(ACTION_COLUMN, edit=True, enable=not busy)
 
 
+def set_progress(progress) -> None:
+    set_progress_value(progress.completed, progress.message)
+
+
+def set_progress_value(value: int, message: str) -> None:
+    if cmds.control(PROGRESS, exists=True):
+        cmds.progressBar(PROGRESS, edit=True, progress=max(0, min(100, int(value))), visible=bool(message))
+    if message:
+        set_status(message)
+
+
 def is_busy() -> bool:
     return bool(cmds.layout(ACTION_COLUMN, exists=True) and not cmds.columnLayout(ACTION_COLUMN, query=True, enable=True))
 
 
-def _run(operation, success) -> None:
+def _run(operation, success, label) -> None:
     try:
         path = runtime.scene_path()
         bridge = runtime.client()
-        runtime.run_operation(lambda: operation(bridge, path), success)
+        runtime.run_operation(lambda: operation(bridge, path), success, label)
     except BridgeError as error:
         set_status(str(error), error=True)
 

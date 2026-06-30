@@ -1,0 +1,81 @@
+name: openasset-depot
+
+services:
+  openasset-api:
+    image: openasset-depot-api:ubuntu-amd64
+    platform: linux/amd64
+    pull_policy: never
+    environment:
+      OAD_BIND_ADDR: 0.0.0.0:8080
+      OAD_DATABASE_URL: postgres://${POSTGRES_USER:-openasset}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-openasset}
+      OAD_DATABASE_MAX_CONNECTIONS: ${OAD_DATABASE_MAX_CONNECTIONS:-20}
+      OAD_JWT_SECRET: ${OAD_JWT_SECRET:?set OAD_JWT_SECRET}
+      OAD_JWT_TTL_SECONDS: ${OAD_JWT_TTL_SECONDS:-86400}
+      OAD_STORAGE_ROOT: /var/lib/openasset/objects
+      OAD_MAX_UPLOAD_BYTES: ${OAD_MAX_UPLOAD_BYTES:-21474836480}
+      OAD_CHUNK_SIZE_BYTES: ${OAD_CHUNK_SIZE_BYTES:-4194304}
+      OAD_REQUEST_TIMEOUT_SECONDS: ${OAD_REQUEST_TIMEOUT_SECONDS:-1800}
+      OAD_CORS_ALLOWED_ORIGINS: https://${OAD_DOMAIN:?set OAD_DOMAIN},http://${OAD_DOMAIN:?set OAD_DOMAIN},tauri://localhost,http://tauri.localhost
+      OAD_RUN_MIGRATIONS: ${OAD_RUN_MIGRATIONS:-true}
+      OAD_ALLOW_SIGNUPS: ${OAD_ALLOW_SIGNUPS:-false}
+      RUST_LOG: ${RUST_LOG:-openasset_api=info,tower_http=info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "8080"
+    volumes:
+      - openasset_objects:/var/lib/openasset/objects
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    platform: linux/amd64
+    pull_policy: never
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-openasset}
+      POSTGRES_USER: ${POSTGRES_USER:-openasset}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    volumes:
+      - openasset_postgres:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-openasset} -d ${POSTGRES_DB:-openasset}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  openasset-web:
+    image: openasset-depot-web:ubuntu-amd64
+    platform: linux/amd64
+    pull_policy: never
+    depends_on:
+      openasset-api:
+        condition: service_healthy
+    ports:
+      - "${OAD_WEB_BIND:-127.0.0.1}:${OAD_WEB_PORT:-5173}:80"
+    networks: [backend, proxy]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+networks:
+  backend:
+    internal: true
+  proxy:
+
+volumes:
+  openasset_postgres:
+  openasset_objects:

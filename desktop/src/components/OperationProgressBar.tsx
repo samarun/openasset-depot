@@ -10,6 +10,7 @@ export function OperationProgressBar({ progress }: OperationProgressBarProps) {
   const total = progress.total ?? 100;
   const completed = Math.min(progress.completed ?? 0, total);
   const finished = progress.phase === "complete";
+  const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
 
   return (
     <div className="operation-progress" role="status" aria-live="polite">
@@ -17,12 +18,31 @@ export function OperationProgressBar({ progress }: OperationProgressBarProps) {
         {finished ? <CheckCircle2 size={17} /> : <LoaderCircle size={17} className="spin" />}
       </span>
       <span className="operation-progress-copy">
-        <strong>{progress.command === "submit" ? "Submitting changes" : "Syncing workspace"}</strong>
+        <strong>{operationLabel(progress.command)}</strong>
         <small>{progress.message}</small>
       </span>
+      <strong className="operation-progress-value">{finished ? "Done" : `${percent}%`}</strong>
       <span className="operation-progress-track" aria-hidden="true">
-        <span style={{ width: `${total > 0 ? (completed / total) * 100 : 0}%` }} />
+        <span style={{ width: `${percent}%` }} />
       </span>
     </div>
   );
+}
+
+function operationLabel(command: IntegrationProgress["command"]): string {
+  return {
+    context: "Opening project",
+    pending: "Checking local changes",
+    status: "Refreshing asset status",
+    checkout: "Checking out asset",
+    add: "Adding asset",
+    delete: "Marking asset for deletion",
+    lock: "Reserving asset",
+    unlock: "Releasing asset",
+    revert: "Reverting checkout",
+    sync: "Syncing latest files",
+    submit: "Submitting changes",
+    history: "Loading version history",
+    validate: "Validating work",
+  }[command];
 }

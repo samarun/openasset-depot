@@ -1,4 +1,4 @@
-import { ChevronDown, Command, FolderGit2, Moon, Search, Sun } from "lucide-react";
+import { ChevronDown, Command, FolderGit2, LogOut, Moon, Search, Sun } from "lucide-react";
 import type { UserSession, Workspace } from "../types/domain";
 
 interface TopBarProps {
@@ -8,6 +8,7 @@ interface TopBarProps {
   onOpenPalette: () => void;
   onToggleTheme: () => void;
   onSwitchWorkspace: () => void;
+  onLogout: () => void;
 }
 
 export function TopBar({
@@ -17,6 +18,7 @@ export function TopBar({
   onOpenPalette,
   onToggleTheme,
   onSwitchWorkspace,
+  onLogout,
 }: TopBarProps) {
   return (
     <header className="topbar">
@@ -40,6 +42,10 @@ export function TopBar({
           <span className="user-avatar">{initials(session.username)}</span>
           <span className="user-name">{session.username}</span>
         </span>
+        <button className="secondary-button topbar-signout" type="button" onClick={onLogout}>
+          <LogOut size={16} />
+          <span>Sign out</span>
+        </button>
       </div>
     </header>
   );

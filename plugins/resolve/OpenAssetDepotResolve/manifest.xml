@@ -3,7 +3,7 @@
   <Plugin>
     <Id>com.openassetdepot.resolve</Id>
     <Name>OpenAsset Depot</Name>
-    <Version>0.1.0</Version>
+    <Version>0.1.2</Version>
     <Description>Version control for selected Resolve media</Description>
     <FilePath>main.js</FilePath>
   </Plugin>

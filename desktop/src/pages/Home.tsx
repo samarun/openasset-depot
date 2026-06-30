@@ -23,6 +23,7 @@ interface HomeProps {
   onSync: () => void;
   onSubmit: () => void;
   busy?: boolean;
+  loadPreview?: (file: AssetFile) => Promise<string | undefined>;
 }
 
 interface WorkItem {
@@ -45,6 +46,7 @@ export function Home({
   onSync,
   onSubmit,
   busy = false,
+  loadPreview,
 }: HomeProps) {
   const needsSync = files.filter((file) => file.statuses.includes("Needs Sync"));
   const modified = files.filter((file) => file.statuses.some((status) =>
@@ -150,7 +152,7 @@ export function Home({
           {files.length > 0 ? (
             <div className="asset-grid studio-asset-grid">
               {files.slice(0, 3).map((file) => (
-                <AssetCard key={file.id} file={file} onSelect={onSelectFile} />
+                <AssetCard key={file.id} file={file} onSelect={onSelectFile} loadPreview={loadPreview} />
               ))}
             </div>
           ) : (

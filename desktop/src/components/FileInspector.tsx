@@ -7,6 +7,7 @@ import {
   History,
   Link2,
   Lock,
+  MessageSquare,
   RotateCcw,
   Send,
   Trash2,
@@ -14,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import type { AssetFile } from "../types/domain";
+import { AssetPreview } from "./AssetPreview";
 import { StatusBadge } from "./StatusBadge";
 
 interface FileInspectorProps {
@@ -24,9 +26,11 @@ interface FileInspectorProps {
   onRevert: (file: AssetFile) => void;
   onDelete: (file: AssetFile) => void;
   onSubmit: () => void;
+  onReview: (file: AssetFile) => void;
   open?: boolean;
   onClose?: () => void;
   busy?: boolean;
+  loadPreview?: (file: AssetFile) => Promise<string | undefined>;
 }
 
 export function FileInspector({
@@ -37,9 +41,11 @@ export function FileInspector({
   onRevert,
   onDelete,
   onSubmit,
+  onReview,
   open = false,
   onClose,
   busy = false,
+  loadPreview,
 }: FileInspectorProps) {
   if (!file) {
     return (
@@ -68,13 +74,16 @@ export function FileInspector({
         <button className="inspector-close" type="button" onClick={onClose} aria-label="Close inspector">
           <X size={18} />
         </button>
-      <div className={`inspector-preview asset-preview-${file.previewTone}`}>
-        <span>{file.name.split(".").pop()?.toUpperCase()}</span>
-      </div>
-      <header className="inspector-header">
-        <h2>{file.name}</h2>
-        <p>{file.path}</p>
-      </header>
+        <AssetPreview
+          file={file}
+          className={`inspector-preview asset-preview-${file.previewTone}`}
+          loadPreview={loadPreview}
+          fallback={<span>{file.name.split(".").pop()?.toUpperCase()}</span>}
+        />
+        <header className="inspector-header">
+          <h2 title={file.name}>{file.name}</h2>
+          <p title={file.path}>{file.path}</p>
+        </header>
       <div className="status-cluster">
         {file.statuses.map((status) => (
           <StatusBadge key={status} status={status} />
@@ -132,6 +141,10 @@ export function FileInspector({
         </div>
       </details>
       <div className="inspector-actions">
+        <button className="secondary-button review-launch-button" type="button" onClick={() => onReview(file)}>
+          <MessageSquare size={16} />
+          Review &amp; Annotate
+        </button>
         <button
           className="primary-button"
           type="button"

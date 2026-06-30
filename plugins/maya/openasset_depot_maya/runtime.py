@@ -26,7 +26,18 @@ def client() -> Any:
         if cmds.optionVar(exists="openassetDepotServer")
         else ""
     )
-    return BridgeClient(scene_path(), cli_path=cli_path or None, server_url=server_url or None)
+    return BridgeClient(
+        scene_path(),
+        cli_path=cli_path or None,
+        server_url=server_url or None,
+        progress_callback=_progress_from_worker,
+    )
+
+
+def _progress_from_worker(progress: Any) -> None:
+    from . import ui
+
+    maya.utils.executeDeferred(lambda progress=progress: ui.set_progress(progress))
 
 
 def runner():
@@ -36,20 +47,21 @@ def runner():
     return _runner
 
 
-def run_operation(operation: Callable[[], Any], success: Callable[[Any], str]) -> None:
+def run_operation(operation: Callable[[], Any], success: Callable[[Any], str], label: str) -> None:
     from . import ui
 
     if ui.is_busy():
         raise BridgeError("Another OpenAsset operation is already running.")
     ui.set_busy(True)
-    ui.set_status("Working...")
+    ui.set_progress_value(2, label)
 
     def completed(result: Any) -> None:
         ui.set_busy(False)
-        ui.set_status(success(result))
+        ui.set_progress_value(100, success(result))
 
     def failed(error: Exception) -> None:
         ui.set_busy(False)
+        ui.set_progress_value(0, "")
         ui.set_status(str(error), error=True)
 
     runner().submit(

@@ -1,8 +1,16 @@
 # Creative Host Integrations
 
+For first-admin creation, artist accounts, CLI login, workspace setup, and
+step-by-step Blender/Maya/Unreal use, see the [administrator and artist user
+guide](user-guide.md).
+
 All host integrations call the bundled or installed `oad` binary without a shell.
-They use protocol version 1, bound stdout/stderr to 4 MiB, apply operation
-timeouts, and keep JWTs out of project files. Run `./scripts/package-integrations.py`
+Artists sign in and connect a project folder once in the desktop app; that local
+session is then available to the creative plug-ins without a terminal login.
+Python hosts use streaming protocol version 2 for live operation progress, while
+the existing protocol remains compatible with other hosts. Integrations bound
+stdout/stderr to 4 MiB, apply operation timeouts, and keep JWTs out of project
+files. Run `./scripts/package-integrations.py`
 and verify `dist/integrations/SHA256SUMS` before studio distribution.
 
 ## Shared workflow
@@ -14,10 +22,12 @@ and verify `dist/integrations/SHA256SUMS` before studio distribution.
 - Add new files, validate, enter a useful description, and submit.
 - Revert removes source-control intent and releases the lock but preserves the
   local creative file.
+- Actions show human-readable progress such as **Checking out scene**,
+  **Downloading files**, **Validating**, and **Submitting changes**.
 
 ## Blender
 
-Install `openasset-depot-blender-0.1.0.zip` through **Edit > Preferences >
+Install `openasset-depot-blender-0.1.2.zip` through **Edit > Preferences >
 Add-ons > Install from Disk**, enable **OpenAsset Depot**, and configure an
 absolute CLI path in the add-on preferences if needed. The **OpenAsset** tab in
 the 3D View sidebar operates on the saved `.blend` scene.

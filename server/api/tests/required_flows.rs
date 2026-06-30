@@ -112,6 +112,20 @@ struct SyncPlanEntry {
     path: String,
     revision_number: i32,
     deleted: bool,
+    #[serde(default)]
+    preview_available: bool,
+    #[serde(default)]
+    review_proxy_available: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReviewCommentEntry {
+    id: Uuid,
+    body: String,
+    timecode_ms: Option<i64>,
+    frame_number: Option<i32>,
+    annotation: Option<serde_json::Value>,
+    resolved_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -472,6 +486,200 @@ async fn user_adds_binary_file_and_submits() {
     assert_eq!(submit.revisions.len(), 1);
     assert_eq!(submit.revisions[0].path, "Models/Hero.fbx");
     assert_eq!(submit.revisions[0].revision_number, 1);
+}
+
+#[tokio::test]
+#[ignore = "requires running OpenAsset Depot API and PostgreSQL"]
+async fn submitted_revision_accepts_and_serves_an_immutable_preview() {
+    let api = api();
+    let project = setup_project(&api, "revision_preview").await;
+    let path = "Models/Preview.fbx";
+    let change_id = create_changelist(&api, &project.alice, project.alice_workspace).await;
+    add_file(
+        &api,
+        &project.alice,
+        project.alice_workspace,
+        change_id,
+        path,
+    )
+    .await;
+    submit_bytes(
+        &api,
+        &project.alice,
+        project.alice_workspace,
+        change_id,
+        path,
+        b"fbx-preview-source",
+    )
+    .await;
+
+    let workspace_id = project.alice_workspace.to_string();
+    let revision_number = "1";
+    let upload = api
+        .client
+        .post(api.url("/api/files/preview"))
+        .bearer_auth(&project.alice.token)
+        .query(&[
+            ("workspace_id", workspace_id.as_str()),
+            ("path", path),
+            ("revision_number", revision_number),
+        ])
+        .header("content-type", "image/png")
+        .body(b"immutable-preview".to_vec())
+        .send()
+        .await
+        .expect("preview upload failed");
+    assert_success(upload).await;
+
+    let plan: Vec<SyncPlanEntry> = authed_post(
+        &api,
+        &project.alice,
+        "/api/sync/plan",
+        serde_json::json!({
+            "workspace_id": project.alice_workspace,
+            "include_current": true
+        }),
+    )
+    .await;
+    assert_eq!(plan.len(), 1);
+    assert!(plan[0].preview_available);
+
+    let download = api
+        .client
+        .get(api.url("/api/files/preview"))
+        .bearer_auth(&project.alice.token)
+        .query(&[
+            ("workspace_id", workspace_id.as_str()),
+            ("path", path),
+            ("revision_number", revision_number),
+        ])
+        .send()
+        .await
+        .expect("preview download failed");
+    assert_eq!(download.status(), StatusCode::OK);
+    assert_eq!(download.headers()["content-type"], "image/png");
+    assert_eq!(
+        download.bytes().await.unwrap(),
+        b"immutable-preview".as_slice()
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires running OpenAsset Depot API and PostgreSQL"]
+async fn revision_review_proxy_comments_annotations_and_ranges_round_trip() {
+    let api = api();
+    let project = setup_project(&api, "revision_review").await;
+    let path = "Models/AnimatedHero.fbx";
+    let change_id = create_changelist(&api, &project.alice, project.alice_workspace).await;
+    add_file(
+        &api,
+        &project.alice,
+        project.alice_workspace,
+        change_id,
+        path,
+    )
+    .await;
+    submit_bytes(
+        &api,
+        &project.alice,
+        project.alice_workspace,
+        change_id,
+        path,
+        b"fbx-source",
+    )
+    .await;
+
+    let target = [
+        ("workspace_id", project.alice_workspace.to_string()),
+        ("path", path.to_string()),
+        ("revision_number", "1".to_string()),
+    ];
+    let proxy_upload = api
+        .client
+        .post(api.url("/api/reviews/proxy"))
+        .bearer_auth(&project.alice.token)
+        .query(&target)
+        .header("content-type", "model/gltf-binary")
+        .body(b"glb-review-proxy".to_vec())
+        .send()
+        .await
+        .expect("review proxy upload failed");
+    assert_success(proxy_upload).await;
+
+    let comment: ReviewCommentEntry = authed_post(
+        &api,
+        &project.alice,
+        "/api/reviews/comments",
+        serde_json::json!({
+            "workspace_id": project.alice_workspace,
+            "path": path,
+            "revision_number": 1,
+            "body": "Ease the landing pose",
+            "timecode_ms": 1250,
+            "frame_number": 30,
+            "annotation": {
+                "marks": [{
+                    "tool": "pen",
+                    "color": "#ffcb4c",
+                    "width": 4,
+                    "points": [{"x": 0.2, "y": 0.3}, {"x": 0.4, "y": 0.5}]
+                }]
+            }
+        }),
+    )
+    .await;
+    assert_eq!(comment.body, "Ease the landing pose");
+    assert_eq!(comment.timecode_ms, Some(1250));
+    assert_eq!(comment.frame_number, Some(30));
+    assert!(comment.annotation.is_some());
+
+    let listed_response = api
+        .client
+        .get(api.url("/api/reviews/comments"))
+        .bearer_auth(&project.alice.token)
+        .query(&target)
+        .send()
+        .await
+        .expect("review comment list failed");
+    let listed: Vec<ReviewCommentEntry> = parse_success(listed_response).await;
+    assert_eq!(listed.len(), 1);
+
+    let resolved: ReviewCommentEntry = authed_post(
+        &api,
+        &project.alice,
+        &format!("/api/reviews/comments/{}/resolve", comment.id),
+        serde_json::json!({
+            "workspace_id": project.alice_workspace,
+            "resolved": true
+        }),
+    )
+    .await;
+    assert!(resolved.resolved_at.is_some());
+
+    let proxy_download = api
+        .client
+        .get(api.url("/api/reviews/proxy"))
+        .bearer_auth(&project.alice.token)
+        .query(&target)
+        .header("range", "bytes=1-3")
+        .send()
+        .await
+        .expect("review proxy range download failed");
+    assert_eq!(proxy_download.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(proxy_download.headers()["content-range"], "bytes 1-3/16");
+    assert_eq!(proxy_download.bytes().await.unwrap(), b"lb-".as_slice());
+
+    let plan: Vec<SyncPlanEntry> = authed_post(
+        &api,
+        &project.alice,
+        "/api/sync/plan",
+        serde_json::json!({
+            "workspace_id": project.alice_workspace,
+            "include_current": true
+        }),
+    )
+    .await;
+    assert!(plan[0].review_proxy_available);
 }
 
 #[tokio::test]

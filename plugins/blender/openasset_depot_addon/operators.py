@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
 import bpy
 
 from . import runtime
@@ -7,6 +13,46 @@ from .bridge_loader import load_bridge
 
 
 _, BridgeError, _ = load_bridge()
+
+
+class OPENASSET_OT_open_desktop(bpy.types.Operator):
+    bl_idname = "openasset.open_desktop"
+    bl_label = "Open OpenAsset Depot Desktop"
+    bl_description = "Open the desktop app so you can renew the shared plug-in session"
+
+    def execute(self, _context):
+        try:
+            if sys.platform == "darwin":
+                result = subprocess.run(
+                    ["open", "-a", "OpenAsset Depot"],
+                    check=False,
+                    capture_output=True,
+                    timeout=10,
+                )
+                if result.returncode != 0:
+                    raise RuntimeError("OpenAsset Depot is not installed in Applications")
+            elif sys.platform == "win32":
+                local_app_data = os.environ.get("LOCALAPPDATA", "")
+                candidate = Path(local_app_data) / "OpenAsset Depot" / "OpenAsset Depot.exe"
+                if not candidate.is_file():
+                    raise RuntimeError("OpenAsset Depot desktop app is not installed")
+                os.startfile(candidate)  # type: ignore[attr-defined]
+            else:
+                executable = shutil.which("openasset-desktop")
+                if not executable:
+                    raise RuntimeError("OpenAsset Depot desktop app is not installed")
+                subprocess.Popen(
+                    [executable],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+        except Exception as error:
+            self.report({"ERROR"}, str(error))
+            return {"CANCELLED"}
+        self.report({"INFO"}, "Sign in to OpenAsset Depot, then return here and retry.")
+        return {"FINISHED"}
 
 
 class OPENASSET_OT_refresh(bpy.types.Operator):
@@ -21,6 +67,7 @@ class OPENASSET_OT_refresh(bpy.types.Operator):
             runtime.run_operation(
                 lambda: bridge.status([path]),
                 success=lambda values: _status_message(values[0]),
+                label="Refreshing status",
             )
         except BridgeError as error:
             self.report({"ERROR"}, str(error))
@@ -40,6 +87,27 @@ class OPENASSET_OT_checkout(bpy.types.Operator):
             runtime.run_operation(
                 lambda: bridge.checkout(path, "Editing in Blender"),
                 success=lambda result: f"Checked out {result['path']}",
+                label="Checking out scene",
+            )
+        except BridgeError as error:
+            self.report({"ERROR"}, str(error))
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+class OPENASSET_OT_add(bpy.types.Operator):
+    bl_idname = "openasset.add"
+    bl_label = "Add Current Scene"
+    bl_description = "Mark this new Blender scene for its first submission"
+
+    def execute(self, _context):
+        try:
+            path = runtime.scene_path()
+            bridge = runtime.client()
+            runtime.run_operation(
+                lambda: bridge.add(path),
+                success=lambda result: f"Added {result['path']} to pending changes",
+                label="Adding scene",
             )
         except BridgeError as error:
             self.report({"ERROR"}, str(error))
@@ -58,6 +126,7 @@ class OPENASSET_OT_sync(bpy.types.Operator):
             runtime.run_operation(
                 bridge.sync,
                 success=lambda result: f"Synced {result.get('synced_count', 0)} file(s)",
+                label="Syncing latest files",
             )
         except BridgeError as error:
             self.report({"ERROR"}, str(error))
@@ -76,6 +145,7 @@ class OPENASSET_OT_validate(bpy.types.Operator):
             runtime.run_operation(
                 lambda: bridge.validate([path], "Blender"),
                 success=_validation_message,
+                label="Validating scene",
             )
         except BridgeError as error:
             self.report({"ERROR"}, str(error))
@@ -94,10 +164,72 @@ class OPENASSET_OT_submit(bpy.types.Operator):
             self.report({"ERROR"}, "Enter a submit description.")
             return {"CANCELLED"}
         try:
+            path = runtime.scene_path()
+            runtime.save_scene_if_dirty()
+            preview_path, preview_warning = runtime.generate_scene_preview()
+            review_proxy_path, review_proxy_warning = runtime.generate_scene_review_proxy()
             bridge = runtime.client()
+
+            def submit_scene():
+                try:
+                    statuses = bridge.status([path])
+                    status = statuses[0] if statuses else None
+                    if status and status.needs_sync:
+                        raise BridgeError(
+                            "A newer depot revision exists. Sync Latest before submitting this scene."
+                        )
+                    if status and status.lock_state == "other":
+                        raise BridgeError(
+                            "Another artist has this scene checked out. Ask them to submit or unlock it, then try again."
+                        )
+                    if status and status.local_state == "untracked":
+                        bridge.add(path)
+                    elif status and status.local_state == "modified" and not status.pending_action:
+                        try:
+                            bridge.checkout(path, "Automatic checkout from Blender submit")
+                        except BridgeError as error:
+                            raise BridgeError(
+                                "This scene could not be checked out. Another artist may be using it; "
+                                f"refresh the status and try again. Details: {error}"
+                            ) from error
+                    pending = bridge.pending().get("files", [])
+                    if not pending:
+                        raise BridgeError(
+                            "Nothing changed since the last submitted revision."
+                        )
+                    result = bridge.submit(description, timeout_seconds=1800)
+                    result["preview_uploaded"] = False
+                    if preview_warning:
+                        result["preview_warning"] = preview_warning
+                    result["review_proxy_uploaded"] = False
+                    if review_proxy_warning:
+                        result["review_proxy_warning"] = review_proxy_warning
+                    if preview_path:
+                        try:
+                            bridge.upload_preview(path, preview_path)
+                            result["preview_uploaded"] = True
+                        except Exception as error:
+                            # The asset revision is already committed at this
+                            # point. Preview transport must never make a valid
+                            # submission appear to have failed.
+                            result["preview_warning"] = str(error)
+                    if review_proxy_path:
+                        try:
+                            bridge.upload_review_proxy(path, review_proxy_path)
+                            result["review_proxy_uploaded"] = True
+                        except Exception as error:
+                            result["review_proxy_warning"] = str(error)
+                    return result
+                finally:
+                    if preview_path:
+                        Path(preview_path).unlink(missing_ok=True)
+                    if review_proxy_path:
+                        Path(review_proxy_path).unlink(missing_ok=True)
+
             runtime.run_operation(
-                lambda: bridge.submit(description, timeout_seconds=1800),
-                success=lambda result: f"Submitted {len(result.get('revisions', []))} file(s)",
+                submit_scene,
+                success=_submit_message,
+                label="Submitting changes",
             )
         except BridgeError as error:
             self.report({"ERROR"}, str(error))
@@ -120,6 +252,7 @@ class OPENASSET_OT_revert(bpy.types.Operator):
             runtime.run_operation(
                 lambda: bridge.revert(path),
                 success=lambda result: f"Reverted checkout for {result['path']}",
+                label="Reverting checkout",
             )
         except BridgeError as error:
             self.report({"ERROR"}, str(error))
@@ -148,9 +281,24 @@ def _validation_message(result) -> str:
     return f"Validation: {errors} error(s), {warnings} warning(s)"
 
 
+def _submit_message(result) -> str:
+    message = f"Submitted {len(result.get('revisions', []))} file(s)"
+    if result.get("preview_uploaded") and result.get("review_proxy_uploaded"):
+        return f"{message} · Preview and interactive review ready"
+    if result.get("review_proxy_uploaded"):
+        return f"{message} · Interactive review ready"
+    if result.get("preview_uploaded"):
+        return f"{message} · Preview ready"
+    if result.get("preview_warning") or result.get("review_proxy_warning"):
+        return f"{message} · Preview unavailable"
+    return message
+
+
 CLASSES = (
+    OPENASSET_OT_open_desktop,
     OPENASSET_OT_refresh,
     OPENASSET_OT_checkout,
+    OPENASSET_OT_add,
     OPENASSET_OT_sync,
     OPENASSET_OT_validate,
     OPENASSET_OT_submit,

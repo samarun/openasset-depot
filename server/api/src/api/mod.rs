@@ -94,10 +94,16 @@ pub fn build_router(state: AppState) -> Router {
         .allow_headers([
             header::AUTHORIZATION,
             header::CONTENT_TYPE,
+            header::RANGE,
             HeaderName::from_static("x-request-id"),
             HeaderName::from_static("idempotency-key"),
         ])
-        .expose_headers([HeaderName::from_static("x-request-id")])
+        .expose_headers([
+            HeaderName::from_static("x-request-id"),
+            header::ACCEPT_RANGES,
+            header::CONTENT_RANGE,
+            header::CONTENT_LENGTH,
+        ])
         .allow_private_network(true);
 
     Router::new()
@@ -105,6 +111,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ready", get(ready))
         .route("/api/users", post(crate::auth::create_user))
         .route("/api/auth/login", post(crate::auth::login))
+        .route(
+            "/api/auth/signup",
+            get(crate::auth::signup_status).post(crate::auth::signup),
+        )
+        .route(
+            "/api/auth/change-password",
+            post(crate::auth::change_password),
+        )
         .route(
             "/api/depots",
             get(crate::depot::list_depots).post(crate::depot::create_depot),
@@ -144,6 +158,26 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/sync/ack", post(crate::sync::ack_sync))
         .route("/api/sync/download", post(crate::sync::download_file))
         .route("/api/files/history", get(crate::sync::file_history))
+        .route(
+            "/api/files/preview",
+            get(crate::previews::download_preview).post(crate::previews::upload_preview),
+        )
+        .route(
+            "/api/reviews/comments",
+            get(crate::reviews::list_comments).post(crate::reviews::create_comment),
+        )
+        .route(
+            "/api/reviews/comments/:id/resolve",
+            post(crate::reviews::resolve_comment),
+        )
+        .route(
+            "/api/reviews/media",
+            get(crate::reviews::download_review_media),
+        )
+        .route(
+            "/api/reviews/proxy",
+            get(crate::reviews::download_review_proxy).post(crate::reviews::upload_review_proxy),
+        )
         .route("/api/locks", get(crate::locking::list_locks))
         .route("/api/locks/page", get(crate::locking::list_locks_page))
         .route("/api/audit", get(crate::audit::list_audit_events))

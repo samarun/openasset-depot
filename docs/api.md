@@ -11,6 +11,15 @@ All endpoints except `/health`, `/ready`, `/api/users` for the race-protected fi
 
 - `POST /api/users`
 - `POST /api/auth/login`
+- `GET /api/auth/signup`
+- `POST /api/auth/signup`
+- `POST /api/auth/change-password`
+
+`GET /api/auth/signup` reports whether controlled self-registration is enabled
+and whether the next account will be the first system administrator. Later
+self-signups require `OAD_ALLOW_SIGNUPS=true`, create non-admin users, and grant
+no depot permissions. Password changes require a bearer token, the current
+password, and a new password of at least eight characters.
 
 ## Core
 
@@ -42,6 +51,8 @@ System admins bypass depot permission checks. Depot owners are treated as depot 
 - `POST /api/files/revert`
 - `POST /api/files/lock`
 - `POST /api/files/unlock`
+- `POST /api/files/preview?workspace_id=<uuid>&path=<depot-path>&revision_number=<n>`
+- `GET /api/files/preview?workspace_id=<uuid>&path=<depot-path>&revision_number=<n>`
 - `GET /api/locks`
 - `GET /api/locks/page?limit=250&before_created_at=<rfc3339>&before_id=<uuid>`
 - `POST /api/changelists`
@@ -60,6 +71,29 @@ returns its original revisions, while different retry content returns `409`.
 `stream_id`, `workspace_id`, and `user_id` filters, returns at most 1,000 rows,
 and orders by `(created_at DESC, id DESC)`. Pass both returned cursor fields to
 read the next page. `/api/locks` remains for protocol-v1 compatibility.
+
+Revision previews accept an authenticated raw PNG, JPEG, or WebP request body
+up to 8 MiB. Each preview is content-addressed, attached to one immutable file
+revision, and streamed only to users with access through the supplied workspace.
+
+## Creative Reviews
+
+- `GET /api/reviews/media?workspace_id=<uuid>&path=<depot-path>&revision_number=<n>`
+- `GET /api/reviews/proxy?workspace_id=<uuid>&path=<depot-path>&revision_number=<n>`
+- `POST /api/reviews/proxy?workspace_id=<uuid>&path=<depot-path>&revision_number=<n>`
+- `GET /api/reviews/comments?workspace_id=<uuid>&path=<depot-path>&revision_number=<n>`
+- `POST /api/reviews/comments`
+- `POST /api/reviews/comments/{id}/resolve`
+
+Review media and proxy downloads are workspace-authorized, immutable, cacheable,
+and support single HTTP byte ranges. Portable proxy uploads accept GLB, glTF,
+FBX, MP4, or WebM bodies up to 512 MiB. One immutable proxy can be attached to
+each asset revision.
+
+Comments are revision-bound and accept optional `timecode_ms`, `frame_number`,
+`parent_comment_id`, and a structured JSON `annotation`. Annotation payloads are
+limited to 128 KiB. Resolve requests can resolve or reopen a comment; both
+comment creation and resolution are recorded in the audit log.
 
 ## Sync And History
 

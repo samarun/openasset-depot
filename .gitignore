@@ -7,6 +7,12 @@ desktop/src-tauri/binaries/
 /.env
 /deploy/.env
 /deploy/.env.production
+/deploy/.env.ubuntu-nginx
 /.oad/
 /data/
 *.oadtmp
+.DS_Store
+__pycache__/
+*.pyc
+/ubuntu-amd64-bundle/.env
+/ubuntu-amd64-bundle/images/*.tar.gz

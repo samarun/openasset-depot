@@ -90,6 +90,30 @@ pub struct LoginRequest {
     pub password: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SignupRequest {
+    pub username: String,
+    pub password: String,
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SignupStatusResponse {
+    pub enabled: bool,
+    pub first_user: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChangePasswordResponse {
+    pub changed: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct LoginResponse {
     pub token: String,
@@ -102,11 +126,7 @@ pub async fn create_user(
     Json(req): Json<CreateUserRequest>,
 ) -> AppResult<Json<UserResponse>> {
     validate_username(&req.username)?;
-    if req.password.len() < 8 {
-        return Err(AppError::bad_request(
-            "password must be at least 8 characters",
-        ));
-    }
+    validate_password(&req.password)?;
 
     let mut tx = state.db.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
@@ -240,6 +260,114 @@ pub async fn login(
     Ok(Json(LoginResponse { token, user }))
 }
 
+pub async fn signup_status(State(state): State<AppState>) -> AppResult<Json<SignupStatusResponse>> {
+    let existing_users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&state.db)
+        .await?;
+    Ok(Json(SignupStatusResponse {
+        enabled: existing_users == 0 || state.config.allow_signups,
+        first_user: existing_users == 0,
+    }))
+}
+
+pub async fn signup(
+    State(state): State<AppState>,
+    Json(req): Json<SignupRequest>,
+) -> AppResult<Json<UserResponse>> {
+    validate_username(&req.username)?;
+    validate_password(&req.password)?;
+
+    let mut tx = state.db.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(0x4f41445f55534552_i64)
+        .execute(&mut *tx)
+        .await?;
+    let existing_users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&mut *tx)
+        .await?;
+    if existing_users > 0 && !state.config.allow_signups {
+        return Err(AppError::Forbidden(
+            "self-signup is disabled; ask a studio administrator for an account".to_string(),
+        ));
+    }
+
+    let password_hash = hash_password(&req.password)?;
+    let row = sqlx::query(
+        r#"
+        INSERT INTO users (username, display_name, password_hash, is_admin)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, username, display_name, is_admin
+        "#,
+    )
+    .bind(req.username)
+    .bind(req.display_name)
+    .bind(password_hash)
+    .bind(existing_users == 0)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(map_unique_conflict("username already exists"))?;
+    let response = UserResponse {
+        id: row.get("id"),
+        username: row.get("username"),
+        display_name: row.get("display_name"),
+        is_admin: row.get("is_admin"),
+    };
+    audit::record_tx(
+        &mut tx,
+        audit::AuditEvent::new(
+            "user_signup",
+            serde_json::json!({
+                "username": response.username,
+                "first_user": existing_users == 0,
+            }),
+        ),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Json(response))
+}
+
+pub async fn change_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ChangePasswordRequest>,
+) -> AppResult<Json<ChangePasswordResponse>> {
+    let user = state.require_user(&headers)?;
+    validate_password(&req.new_password)?;
+    if req.current_password == req.new_password {
+        return Err(AppError::bad_request(
+            "new password must be different from the current password",
+        ));
+    }
+
+    let current_hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
+        .bind(user.user_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::Unauthorized("account no longer exists".to_string()))?;
+    if !verify_password(&req.current_password, &current_hash)? {
+        return Err(AppError::Unauthorized(
+            "current password is incorrect".to_string(),
+        ));
+    }
+
+    let password_hash = hash_password(&req.new_password)?;
+    sqlx::query("UPDATE users SET password_hash = $1, updated_at = now() WHERE id = $2")
+        .bind(password_hash)
+        .bind(user.user_id)
+        .execute(&state.db)
+        .await?;
+    audit::record(
+        &state.db,
+        audit::AuditEvent {
+            actor_user_id: Some(user.user_id),
+            ..audit::AuditEvent::new("password_change", serde_json::json!({}))
+        },
+    )
+    .await?;
+    Ok(Json(ChangePasswordResponse { changed: true }))
+}
+
 fn hash_password(password: &str) -> AppResult<String> {
     let salt = SaltString::generate(&mut OsRng);
     Ok(Argon2::default()
@@ -265,6 +393,18 @@ fn validate_username(username: &str) -> AppResult<()> {
         return Err(AppError::bad_request(
             "username may contain letters, numbers, '.', '_' and '-'",
         ));
+    }
+    Ok(())
+}
+
+fn validate_password(password: &str) -> AppResult<()> {
+    if password.len() < 8 {
+        return Err(AppError::bad_request(
+            "password must be at least 8 characters",
+        ));
+    }
+    if password.len() > 1024 {
+        return Err(AppError::bad_request("password is too long"));
     }
     Ok(())
 }

@@ -14,6 +14,7 @@ pub struct Config {
     pub request_timeout: Duration,
     pub chunk_size: usize,
     pub run_migrations: bool,
+    pub allow_signups: bool,
     pub cors_allowed_origins: Vec<String>,
 }
 
@@ -76,6 +77,7 @@ impl Config {
             run_migrations: env::var("OAD_RUN_MIGRATIONS")
                 .map(|value| value != "false" && value != "0")
                 .unwrap_or(true),
+            allow_signups: parse_bool_env("OAD_ALLOW_SIGNUPS", false)?,
             cors_allowed_origins: parse_cors_origins(
                 &env::var("OAD_CORS_ALLOWED_ORIGINS").unwrap_or_else(|_| {
                     "http://127.0.0.1:5173,http://localhost:5173,tauri://localhost,http://tauri.localhost"
@@ -83,6 +85,19 @@ impl Config {
                 }),
             )?,
         })
+    }
+}
+
+fn parse_bool_env(key: &str, default: bool) -> AppResult<bool> {
+    match env::var(key) {
+        Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" | "on" => Ok(true),
+            "false" | "0" | "no" | "off" => Ok(false),
+            _ => Err(AppError::configuration(format!(
+                "{key} must be true or false"
+            ))),
+        },
+        Err(_) => Ok(default),
     }
 }
 
@@ -144,7 +159,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_cors_origins, validate_jwt_secret};
+    use super::{parse_bool_env, parse_cors_origins, validate_jwt_secret};
 
     #[test]
     fn jwt_secret_rejects_short_values() {
@@ -167,5 +182,12 @@ mod tests {
         assert!(parse_cors_origins("*").is_err());
         assert!(parse_cors_origins("localhost:5173").is_err());
         assert!(parse_cors_origins("https://depot.example.test,tauri://localhost").is_ok());
+    }
+
+    #[test]
+    fn boolean_environment_parser_rejects_ambiguous_values() {
+        std::env::set_var("OAD_TEST_BOOLEAN", "sometimes");
+        assert!(parse_bool_env("OAD_TEST_BOOLEAN", false).is_err());
+        std::env::remove_var("OAD_TEST_BOOLEAN");
     }
 }

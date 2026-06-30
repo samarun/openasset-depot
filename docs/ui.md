@@ -91,6 +91,11 @@ emits newline-delimited progress and result messages, Tauri forwards progress as
 scoped window events, and the UI shows the current phase. Existing DCC clients
 remain on the default v1 single-result envelope.
 
+The browser uses a separate web-intake workflow: selected `File` objects are
+validated and sent as multipart changelist content. Browser refresh reads depot
+state; it never claims to write an arbitrary local project folder. Desktop and
+DCC workspaces consume browser submissions through normal verified sync.
+
 ## Studio Design Language
 
 The desktop experience is organized around active production work rather than management metrics. My Work opens with project context, a continuous production-status rail, the asset workbench, a personal action queue, and depot activity. A graphite production rail separates creative workflow from administrative utilities, while teal, amber, blue, and coral are reserved for source-control meaning.

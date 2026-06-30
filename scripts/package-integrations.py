@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import platform
 import shutil
 import tarfile
 import zipfile
@@ -16,7 +17,7 @@ OUTPUT = ROOT / "dist" / "integrations"
 COMMON_PYTHON = PLUGINS / "common" / "openasset_depot_bridge"
 COMMON_NODE = PLUGINS / "common" / "node" / "openasset-cli.js"
 EXCLUDED_PARTS = {"__pycache__", ".DS_Store"}
-VERSION = "0.1.0"
+VERSION = "0.1.2"
 
 
 def source_files(root: Path):
@@ -30,13 +31,37 @@ def add_tree(archive: zipfile.ZipFile, source: Path, prefix: str) -> None:
         archive.write(path, str(Path(prefix) / path.relative_to(source)))
 
 
-def zip_blender() -> Path:
+def blender_platform_tag() -> str:
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    if system == "darwin":
+        system = "macos"
+    if machine in {"aarch64", "arm64"}:
+        machine = "arm64"
+    elif machine in {"amd64", "x86_64"}:
+        machine = "amd64"
+    return f"{system}-{machine}"
+
+
+def zip_blender() -> list[Path]:
     target = OUTPUT / f"openasset-depot-blender-{VERSION}.zip"
+    platform_tag = blender_platform_tag()
+    platform_target = OUTPUT / f"openasset-depot-blender-{platform_tag}-{VERSION}.zip"
     source = PLUGINS / "blender" / "openasset_depot_addon"
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
         add_tree(archive, source, "openasset_depot_addon")
         add_tree(archive, COMMON_PYTHON, "openasset_depot_addon/vendor/openasset_depot_bridge")
-    return target
+    cli_name = "oad.exe" if platform.system().lower() == "windows" else "oad"
+    cli_binary = ROOT / "target" / "release" / cli_name
+    if not cli_binary.is_file():
+        return [target]
+    shutil.copyfile(target, platform_target)
+    with zipfile.ZipFile(platform_target, "a", zipfile.ZIP_DEFLATED) as archive:
+        archive.write(
+            cli_binary,
+            f"openasset_depot_addon/bin/{platform_tag}/{cli_name}",
+        )
+    return [target, platform_target]
 
 
 def zip_maya() -> Path:
@@ -117,7 +142,7 @@ def main() -> None:
         shutil.rmtree(OUTPUT)
     OUTPUT.mkdir(parents=True)
     artifacts = [
-        zip_blender(),
+        *zip_blender(),
         zip_maya(),
         zip_python_host(
             "houdini",

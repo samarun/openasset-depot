@@ -1450,7 +1450,7 @@ dependencies = [
 
 [[package]]
 name = "oad"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1483,7 +1483,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "openasset-api"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "argon2",
  "async-stream",
@@ -1513,7 +1513,7 @@ dependencies = [
 
 [[package]]
 name = "openasset-sdk"
-version = "0.1.0"
+version = "0.1.2"
 dependencies = [
  "reqwest",
  "serde",

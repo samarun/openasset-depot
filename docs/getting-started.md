@@ -10,14 +10,21 @@
    made a system admin.
 5. Sign in to the native desktop app. Open **Admin**, create a depot for the
    game/show, and create its `main` stream.
-6. Create artists as the admin and grant `read`, `write`, or `admin` depot roles.
+6. Create artists and grant `read`, `write`, or `admin` depot roles through the
+   authenticated API as described in the [user guide](user-guide.md).
 
 ## Create a workspace
 
-In the desktop workspace chooser, select **New Workspace**. Choose the depot,
-stream, and local project folder. Existing Blender, Maya, Unreal, Unity, Houdini,
-or editorial project folders are allowed. OpenAsset writes only the `.oad`
-metadata directory during initialization.
+In the desktop workspace chooser, select **Connect Project Folder**. Choose the
+production and local project folder, then select **Create & Start**. The stream
+and unique workspace name are selected automatically and remain available under
+**Workspace details** when needed. Existing Blender, Maya, Unreal, Unity,
+Houdini, or editorial project folders are allowed. OpenAsset writes only the
+`.oad` metadata directory during initialization.
+
+Signing in to the desktop app also connects installed creative plug-ins. An
+artist does not need to run a separate terminal login or paste a CLI path when
+using a platform integration package.
 
 The local folder becomes the workspace boundary. Paths outside it, path
 traversal, symlink escapes, nonportable Windows device names, and invalid cross-

@@ -735,7 +735,7 @@ async fn ensure_pending_changelist_for_workspace(
     }
 }
 
-async fn insert_blob_records(
+pub(crate) async fn insert_blob_records(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     manifest: &BlobManifest,
 ) -> AppResult<()> {

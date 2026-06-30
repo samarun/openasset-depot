@@ -1,9 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { OpenAssetApiClient, friendlyApiError, isConnectionError } from "./api/client";
+import {
+  type BrowserUpload,
+  OpenAssetApiClient,
+  friendlyApiError,
+  isConnectionError,
+} from "./api/client";
 import { ActionNotice } from "./components/ActionNotice";
 import { CommandPalette, type CommandAction } from "./components/CommandPalette";
 import { ConnectionStatusBar } from "./components/ConnectionStatusBar";
 import { OperationProgressBar } from "./components/OperationProgressBar";
+import { ReviewViewer, type ReviewCommentDraft } from "./components/ReviewViewer";
 import { Sidebar } from "./components/Sidebar";
 import { SubmitDialog } from "./components/SubmitDialog";
 import { TopBar } from "./components/TopBar";
@@ -14,7 +20,9 @@ import {
   runWorkspaceIntegration,
 } from "./native/integration";
 import {
+  clearCliSession,
   chooseWorkspaceFiles,
+  configureCliSession,
   initializeLocalWorkspace,
   isNativeDesktop,
   removeLocalWorkspace,
@@ -44,6 +52,8 @@ import type {
   FileHistoryEntry,
   FileTypeRule,
   LockInfo,
+  ReviewComment,
+  ReviewMedia,
   Stream,
   SyncPlanEntry,
   UserSession,
@@ -51,10 +61,17 @@ import type {
   ViewKey,
   Workspace as WorkspaceModel,
 } from "./types/domain";
+import { createUuid } from "./utils/uuid";
 
 type Theme = "light" | "dark";
 type ConnectionMode = "connecting" | "connected" | "demo" | "reconnecting";
 type Notice = { message: string; tone: "success" | "error" | "info" };
+const DIRECT_REVIEW_EXTENSIONS = new Set([
+  "png", "jpg", "jpeg", "webp", "gif",
+  "mp4", "m4v", "webm", "mov",
+  "mp3", "wav", "ogg", "oga",
+  "fbx", "glb", "gltf",
+]);
 
 export function App() {
   const [session, setSession] = useState<UserSession | undefined>(() => readStoredSession());
@@ -74,6 +91,8 @@ export function App() {
   const [workspaceFiles, setWorkspaceFiles] = useState<SyncPlanEntry[]>([]);
   const [workspaceFilesHasMore, setWorkspaceFilesHasMore] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<PendingIntegrationResult["files"]>([]);
+  const [browserUploads, setBrowserUploads] = useState<BrowserUpload[]>([]);
+  const [browserChangelistId, setBrowserChangelistId] = useState<string>();
   const [selectedFileId, setSelectedFileId] = useState<string>();
   const [historyEntries, setHistoryEntries] = useState<FileHistoryEntry[]>([]);
   const [historyError, setHistoryError] = useState<string>();
@@ -89,11 +108,28 @@ export function App() {
   const [workspaceError, setWorkspaceError] = useState<string>();
   const [notice, setNotice] = useState<Notice>();
   const [operationProgress, setOperationProgress] = useState<IntegrationProgress>();
+  const [reviewFile, setReviewFile] = useState<AssetFile>();
+  const [demoReviewComments, setDemoReviewComments] = useState<ReviewComment[]>([]);
 
   const api = useMemo(
     () => (session ? new OpenAssetApiClient(session.serverUrl) : undefined),
     [session],
   );
+  useEffect(() => {
+    if (!session || session.token === "mock-preview-token" || !isNativeDesktop()) return;
+    void configureCliSession(session).catch((error: unknown) => {
+      setNotice({
+        message: `Signed in, but creative plug-ins could not be connected automatically: ${friendlyApiError(error)}`,
+        tone: "error",
+      });
+    });
+  }, [session]);
+  const logout = useCallback(() => {
+    void clearCliSession();
+    sessionStorage.removeItem("oad.session");
+    setSession(undefined);
+    setSelectedWorkspace(undefined);
+  }, []);
   const demoMode = connectionMode === "demo";
   const files = useMemo(() => {
     if (demoMode) return mockFiles;
@@ -137,6 +173,98 @@ export function App() {
   }, [pendingFiles]);
   const changelists = demoMode ? mockChangelists : liveChangelist ? [liveChangelist] : [];
   const selectedFile = files.find((file) => file.id === selectedFileId) ?? files[0];
+  const loadAssetPreview = useCallback(async (file: AssetFile) => {
+    if (!session || !api || !selectedWorkspace || demoMode || !file.previewAvailable) return undefined;
+    const blob = await api.downloadPreview(
+      session.token,
+      selectedWorkspace.id,
+      file.path,
+      file.revision,
+    );
+    return blob ? URL.createObjectURL(blob) : undefined;
+  }, [api, demoMode, selectedWorkspace, session]);
+
+  const loadReviewMedia = useCallback(async (file: AssetFile): Promise<ReviewMedia | undefined> => {
+    if (demoMode) {
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#173c37"/><stop offset="1" stop-color="#11181b"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#g)"/><circle cx="960" cy="210" r="220" fill="#76d2c2" opacity=".12"/><text x="72" y="610" fill="#dce9e6" font-family="system-ui" font-size="48" font-weight="700">${escapeSvg(file.name)}</text><text x="75" y="658" fill="#8eaaa5" font-family="system-ui" font-size="22">Rendered DCC review proxy · Version ${file.revision}</text></svg>`;
+      return {
+        blob: new Blob([svg], { type: "image/svg+xml" }),
+        contentType: "image/svg+xml",
+        source: "preview",
+      };
+    }
+    if (!session || !api || !selectedWorkspace) return undefined;
+    const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+    if (file.reviewProxyAvailable) {
+      const proxy = await api.downloadReviewProxy(session.token, selectedWorkspace.id, file.path, file.revision);
+      if (proxy) return { blob: proxy, contentType: proxy.type || "application/octet-stream", source: "asset" };
+    }
+    if (DIRECT_REVIEW_EXTENSIONS.has(extension)) {
+      const blob = await api.downloadReviewMedia(session.token, selectedWorkspace.id, file.path, file.revision);
+      if (blob) return { blob, contentType: blob.type || "application/octet-stream", source: "asset" };
+    }
+    const preview = await api.downloadPreview(session.token, selectedWorkspace.id, file.path, file.revision);
+    return preview ? { blob: preview, contentType: preview.type, source: "preview" } : undefined;
+  }, [api, demoMode, selectedWorkspace, session]);
+
+  const loadReviewComments = useCallback(async (file: AssetFile): Promise<ReviewComment[]> => {
+    if (demoMode) {
+      return demoReviewComments.filter((comment) =>
+        comment.path === file.path && comment.revision_number === file.revision
+      );
+    }
+    if (!session || !api || !selectedWorkspace) return [];
+    return api.listReviewComments(session.token, selectedWorkspace.id, file.path, file.revision);
+  }, [api, demoMode, demoReviewComments, selectedWorkspace, session]);
+
+  const createReviewComment = useCallback(async (
+    file: AssetFile,
+    draft: ReviewCommentDraft,
+  ): Promise<ReviewComment> => {
+    if (demoMode) {
+      const created: ReviewComment = {
+        id: createUuid(),
+        path: file.path,
+        revision_number: file.revision,
+        author_user_id: session?.username ?? "demo.artist",
+        author: session?.username ?? "demo.artist",
+        body: draft.body,
+        timecode_ms: draft.timecodeMs,
+        frame_number: draft.frameNumber,
+        annotation: draft.annotation,
+        created_at: new Date().toISOString(),
+      };
+      setDemoReviewComments((current) => [...current, created]);
+      return created;
+    }
+    if (!session || !api || !selectedWorkspace) throw new Error("Connect to the depot before commenting.");
+    return api.createReviewComment(session.token, {
+      workspace_id: selectedWorkspace.id,
+      path: file.path,
+      revision_number: file.revision,
+      body: draft.body,
+      timecode_ms: draft.timecodeMs,
+      frame_number: draft.frameNumber,
+      annotation: draft.annotation,
+    });
+  }, [api, demoMode, selectedWorkspace, session]);
+
+  const resolveReviewComment = useCallback(async (
+    comment: ReviewComment,
+    resolved: boolean,
+  ): Promise<ReviewComment> => {
+    if (demoMode) {
+      const updated: ReviewComment = {
+        ...comment,
+        resolved_at: resolved ? new Date().toISOString() : null,
+        resolved_by: resolved ? (session?.username ?? "demo.artist") : null,
+      };
+      setDemoReviewComments((current) => current.map((item) => item.id === comment.id ? updated : item));
+      return updated;
+    }
+    if (!session || !api || !selectedWorkspace) throw new Error("Connect to the depot before updating comments.");
+    return api.resolveReviewComment(session.token, selectedWorkspace.id, comment.id, resolved);
+  }, [api, demoMode, selectedWorkspace, session]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -265,10 +393,7 @@ export function App() {
   }, [api, demoMode, selectedWorkspace, session, workspaceFiles, workspaceFilesHasMore]);
 
   const refreshPending = useCallback(async () => {
-    if (!session || !selectedWorkspace || demoMode || !isNativeDesktop()) {
-      if (!demoMode) setPendingFiles([]);
-      return;
-    }
+    if (!session || !selectedWorkspace || demoMode || !isNativeDesktop()) return;
     try {
       const result = await runWorkspaceIntegration<PendingIntegrationResult>(
         session,
@@ -286,6 +411,8 @@ export function App() {
     setWorkspaceFiles([]);
     setWorkspaceFilesHasMore(false);
     setPendingFiles([]);
+    setBrowserUploads([]);
+    setBrowserChangelistId(undefined);
   }, [selectedWorkspace?.id]);
 
   useEffect(() => {
@@ -302,7 +429,16 @@ export function App() {
       return;
     }
     if (!isNativeDesktop()) {
-      setNotice({ message: "Sync Latest writes project files from the desktop app.", tone: "info" });
+      setActionBusy(true);
+      try {
+        await Promise.all([refreshSyncPlan(false), refreshWorkspaceFiles()]);
+        setNotice({
+          message: "Depot refreshed. Desktop and DCC workspaces can use Sync Latest to download these revisions.",
+          tone: "success",
+        });
+      } finally {
+        setActionBusy(false);
+      }
       return;
     }
     setActionBusy(true);
@@ -434,6 +570,7 @@ export function App() {
           core: { warnings: ValidationMessage[]; errors: ValidationMessage[] };
         }>(session, selectedWorkspace, "validate", {
           paths: activeChangelist.files.map((file) => file.path),
+          onProgress: setOperationProgress,
         });
         setValidationWarnings([...response.adapter.warnings, ...response.core.warnings]);
         const errors = [...response.adapter.errors, ...response.core.errors];
@@ -447,7 +584,9 @@ export function App() {
       const response = await api.validateWorkspace(
         session.token,
         selectedWorkspace.id,
-        activeChangelist.files.map((file) => ({ path: file.path, size_bytes: 1 })),
+        browserUploads.length > 0
+          ? browserUploads.map((upload) => ({ path: upload.path, size_bytes: upload.file.size }))
+          : activeChangelist.files.map((file) => ({ path: file.path, size_bytes: 1 })),
       );
       setValidationWarnings(response.warnings);
       setValidationErrors(response.errors);
@@ -463,8 +602,9 @@ export function App() {
       return false;
     } finally {
       setValidating(false);
+      window.setTimeout(() => setOperationProgress(undefined), 900);
     }
-  }, [activeChangelist, api, demoMode, selectedWorkspace, session]);
+  }, [activeChangelist, api, browserUploads, demoMode, selectedWorkspace, session]);
 
   useEffect(() => {
     if (activeView !== "history" || !selectedFile) return;
@@ -525,6 +665,27 @@ export function App() {
       setNotice({ message: `${actionLabel(action)} previewed in Demo Mode.`, tone: "info" });
       return;
     }
+    if (!isNativeDesktop() && action === "revert" && browserUploads.some((upload) => upload.path === file.path)) {
+      setActionBusy(true);
+      try {
+        if (browserChangelistId) {
+          await api.revertFile(session.token, selectedWorkspace.id, file.path, browserChangelistId);
+        }
+        const remaining = browserUploads.filter((upload) => upload.path !== file.path);
+        setBrowserUploads(remaining);
+        setPendingFiles(remaining.map((upload) => ({
+          path: upload.path,
+          local_path: upload.file.name,
+          action: upload.action,
+        })));
+        setNotice({ message: `Removed ${file.name} from the browser upload.`, tone: "success" });
+      } catch (error) {
+        setNotice({ message: friendlyApiError(error), tone: "error" });
+      } finally {
+        setActionBusy(false);
+      }
+      return;
+    }
     if (!isNativeDesktop() && action !== "unlock") {
       setNotice({ message: `${actionLabel(action)} changes local project state and requires the desktop app.`, tone: "info" });
       return;
@@ -537,6 +698,7 @@ export function App() {
         await runWorkspaceIntegration(session, selectedWorkspace, command, {
           paths: [file.path],
           reason: action === "lock" ? "Checked out from OpenAsset Depot desktop" : undefined,
+          onProgress: setOperationProgress,
         });
         await Promise.all([refreshLocks(), refreshPending()]);
       } else if (action === "lock") {
@@ -557,13 +719,44 @@ export function App() {
       setNotice({ message: friendlyApiError(error), tone: "error" });
     } finally {
       setActionBusy(false);
+      window.setTimeout(() => setOperationProgress(undefined), 900);
     }
-  }, [api, demoMode, refreshLocks, refreshPending, selectedWorkspace, session]);
+  }, [api, browserChangelistId, browserUploads, demoMode, refreshLocks, refreshPending, selectedWorkspace, session]);
 
-  const addWorkspaceFiles = useCallback(async () => {
+  const addWorkspaceFiles = useCallback(async (browserFiles?: File[]) => {
     if (!session || !selectedWorkspace || demoMode) return;
     if (!isNativeDesktop()) {
-      setNotice({ message: "Choose and add local files from the desktop app.", tone: "info" });
+      if (!browserFiles || browserFiles.length === 0) return;
+      const byPath = new Map(browserUploads.map((upload) => [upload.path, upload]));
+      for (const file of browserFiles) {
+        const path = browserUploadPath(file);
+        const tracked = workspaceFiles.some((entry) => entry.path === path && !entry.deleted);
+        byPath.set(path, { path, file, action: tracked ? "edit" : "add" });
+      }
+      const uploads = Array.from(byPath.values()).sort((left, right) => left.path.localeCompare(right.path));
+      setBrowserUploads(uploads);
+      setPendingFiles(uploads.map((upload) => ({
+        path: upload.path,
+        local_path: upload.file.name,
+        action: upload.action,
+      })));
+      setActiveChangelist({
+        id: browserChangelistId ?? "browser-upload",
+        title: "Browser Upload",
+        description: "Uploaded from the web workspace",
+        files: uploads.map((upload) => ({
+          ...assetFromPendingPath(upload.path, upload.action),
+          size: formatBytes(upload.file.size),
+        })),
+        warnings: [],
+        ready: true,
+        source: "backend",
+      });
+      setSubmitOpen(true);
+      setNotice({
+        message: `Selected ${uploads.length} ${uploads.length === 1 ? "file" : "files"}. Review and submit the upload.`,
+        tone: "success",
+      });
       return;
     }
     const selected = await chooseWorkspaceFiles(selectedWorkspace.local_path);
@@ -571,7 +764,10 @@ export function App() {
     setActionBusy(true);
     try {
       for (const path of selected) {
-        await runWorkspaceIntegration(session, selectedWorkspace, "add", { paths: [path] });
+        await runWorkspaceIntegration(session, selectedWorkspace, "add", {
+          paths: [path],
+          onProgress: setOperationProgress,
+        });
       }
       await refreshPending();
       setNotice({
@@ -582,8 +778,9 @@ export function App() {
       setNotice({ message: friendlyApiError(error), tone: "error" });
     } finally {
       setActionBusy(false);
+      window.setTimeout(() => setOperationProgress(undefined), 900);
     }
-  }, [demoMode, refreshPending, selectedWorkspace, session]);
+  }, [browserChangelistId, browserUploads, demoMode, refreshPending, selectedWorkspace, session, workspaceFiles]);
 
   const submitChanges = useCallback(async (description: string) => {
     if (demoMode) {
@@ -591,8 +788,8 @@ export function App() {
       setNotice({ message: "Submission preview completed in Demo Mode.", tone: "info" });
       return;
     }
-    if (!session || !selectedWorkspace || !isNativeDesktop()) {
-      setNotice({ message: "Submit Changes requires the desktop app.", tone: "error" });
+    if (!session || !selectedWorkspace || !api) {
+      setNotice({ message: "Connect to the server before submitting changes.", tone: "error" });
       return;
     }
     if (!description) {
@@ -601,10 +798,37 @@ export function App() {
     }
     setActionBusy(true);
     try {
-      await runWorkspaceIntegration(session, selectedWorkspace, "submit", {
-        description,
-        onProgress: setOperationProgress,
-      });
+      if (isNativeDesktop()) {
+        await runWorkspaceIntegration(session, selectedWorkspace, "submit", {
+          description,
+          onProgress: setOperationProgress,
+        });
+      } else {
+        if (browserUploads.length === 0) throw new Error("Choose one or more files to upload first.");
+        if (!await validateSubmit()) return;
+        let changelistId = browserChangelistId;
+        if (!changelistId) {
+          const changelist = await api.createChangelist(session.token, selectedWorkspace.id, description);
+          changelistId = changelist.id;
+          setBrowserChangelistId(changelistId);
+        }
+        for (const upload of browserUploads) {
+          if (upload.action === "edit") {
+            await api.editFile(session.token, selectedWorkspace.id, upload.path, changelistId);
+          } else {
+            await api.addFile(session.token, selectedWorkspace.id, upload.path, changelistId);
+          }
+        }
+        await api.submitChangelist(
+          session.token,
+          selectedWorkspace.id,
+          changelistId,
+          browserUploads,
+        );
+        setBrowserUploads([]);
+        setBrowserChangelistId(undefined);
+        setPendingFiles([]);
+      }
       setSubmitOpen(false);
       await Promise.all([
         refreshPending(),
@@ -612,7 +836,12 @@ export function App() {
         refreshSyncPlan(false),
         refreshWorkspaceFiles(),
       ]);
-      setNotice({ message: "Changes submitted successfully.", tone: "success" });
+      setNotice({
+        message: isNativeDesktop()
+          ? "Changes submitted successfully."
+          : "Browser upload submitted. Desktop and DCC workspaces can sync it now.",
+        tone: "success",
+      });
     } catch (error) {
       setNotice({ message: friendlyApiError(error), tone: "error" });
     } finally {
@@ -621,6 +850,9 @@ export function App() {
     }
   }, [
     demoMode,
+    api,
+    browserChangelistId,
+    browserUploads,
     refreshLocks,
     refreshPending,
     refreshSyncPlan,
@@ -691,6 +923,7 @@ export function App() {
   if (!selectedWorkspace) {
     return (
       <WorkspaceSelector
+        username={session.username}
         workspaces={workspaces}
         depots={depots}
         streams={streams}
@@ -724,6 +957,7 @@ export function App() {
           onOpenPalette={() => setPaletteOpen(true)}
           onToggleTheme={() => setTheme((value) => (value === "light" ? "dark" : "light"))}
           onSwitchWorkspace={() => setSelectedWorkspace(undefined)}
+          onLogout={logout}
         />
         <div className="app-content">
           {demoMode && (
@@ -749,6 +983,15 @@ export function App() {
         onSubmit={(description) => void submitChanges(description)}
         onClose={() => setSubmitOpen(false)}
       />
+      <ReviewViewer
+        file={reviewFile}
+        open={Boolean(reviewFile)}
+        onClose={() => setReviewFile(undefined)}
+        loadMedia={loadReviewMedia}
+        loadComments={loadReviewComments}
+        createComment={createReviewComment}
+        resolveComment={resolveReviewComment}
+      />
     </div>
   );
 
@@ -760,16 +1003,19 @@ export function App() {
           selectedFile={selectedFile}
           onSelectFile={selectFile}
           onSync={() => void syncLatest()}
-          onChooseFiles={() => void addWorkspaceFiles()}
+          onChooseFiles={(selected) => void addWorkspaceFiles(selected)}
+          browserMode={!isNativeDesktop()}
           onLock={(file) => void performFileAction("lock", file)}
           onUnlock={(file) => void performFileAction("unlock", file)}
           onRevert={(file) => void performFileAction("revert", file)}
           onDelete={(file) => void performFileAction("delete", file)}
           onSubmit={() => openSubmit()}
+          onReview={setReviewFile}
           onHistory={() => setActiveView("history")}
           hasMoreFiles={workspaceFilesHasMore}
           onLoadMore={() => void loadMoreWorkspaceFiles()}
           busy={actionBusy}
+          loadPreview={loadAssetPreview}
         />
       );
     }
@@ -808,6 +1054,7 @@ export function App() {
             onSync={() => void syncLatest()}
             onSubmit={() => openSubmit()}
             busy={actionBusy}
+            loadPreview={loadAssetPreview}
           />
         );
       }
@@ -832,8 +1079,15 @@ export function App() {
           onDeleteWorkspace={deleteWorkspace}
           deletingWorkspace={actionBusy}
           onLogout={() => {
-            sessionStorage.removeItem("oad.session");
-            setSession(undefined);
+            logout();
+          }}
+          onChangePassword={async (currentPassword, newPassword) => {
+            if (!api) throw new Error("Server connection is unavailable.");
+            try {
+              await api.changePassword(currentSession.token, currentPassword, newPassword);
+            } catch (error) {
+              throw new Error(friendlyApiError(error));
+            }
           }}
         />
       );
@@ -861,6 +1115,7 @@ export function App() {
         onSync={() => void syncLatest()}
         onSubmit={() => openSubmit()}
         busy={actionBusy}
+        loadPreview={loadAssetPreview}
       />
     );
   }
@@ -879,6 +1134,32 @@ function actionLabel(action: "lock" | "unlock" | "add" | "delete" | "revert"): s
   if (action === "add") return "Add File";
   if (action === "delete") return "Mark for Delete";
   return "Revert Intent";
+}
+
+function escapeSvg(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+function browserUploadPath(file: File): string {
+  const relativePath = file.webkitRelativePath || file.name;
+  return relativePath
+    .replaceAll("\\", "/")
+    .replace(/^\/+/, "")
+    .split("/")
+    .filter((part) => part && part !== ".")
+    .join("/");
+}
+
+function formatBytes(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 function demoHistory(file: AssetFile, username: string): FileHistoryEntry[] {

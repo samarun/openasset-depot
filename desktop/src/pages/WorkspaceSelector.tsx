@@ -6,6 +6,7 @@ import { chooseWorkspaceDirectory, isNativeDesktop } from "../native/workspaces"
 import type { CreateWorkspaceInput, Depot, Stream, Workspace } from "../types/domain";
 
 interface WorkspaceSelectorProps {
+  username: string;
   workspaces: Workspace[];
   depots: Depot[];
   streams: Stream[];
@@ -20,6 +21,7 @@ interface WorkspaceSelectorProps {
 }
 
 export function WorkspaceSelector({
+  username,
   workspaces,
   depots,
   streams,
@@ -32,6 +34,7 @@ export function WorkspaceSelector({
   onCreate,
   onSelect,
 }: WorkspaceSelectorProps) {
+  const nativeDesktop = isNativeDesktop();
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
   const [depotId, setDepotId] = useState("");
@@ -57,7 +60,7 @@ export function WorkspaceSelector({
   function openCreate() {
     const firstDepot = depots[0]?.id ?? "";
     const firstStream = streams.find((stream) => stream.depot_id === firstDepot)?.id ?? "";
-    setName("");
+    setName(suggestedWorkspaceName(username, depots[0]?.name));
     setDepotId(firstDepot);
     setStreamId(firstStream);
     setLocalPath("");
@@ -137,7 +140,7 @@ export function WorkspaceSelector({
           <div className="button-row">
             <button className="primary-button" type="button" onClick={openCreate} disabled={depots.length === 0}>
               <Plus size={16} />
-              New Workspace
+              {nativeDesktop ? "Connect Project Folder" : "New Workspace"}
             </button>
             <button className="secondary-button" type="button" onClick={onRefresh}>
               <RefreshCcw size={16} />
@@ -166,8 +169,12 @@ export function WorkspaceSelector({
         ) : workspaces.length === 0 && !loading ? (
           <EmptyState
             icon={FolderKanban}
-            title="No workspaces"
-            detail={depots.length > 0 ? "Create a local workspace to start working." : "Create a depot and stream before adding a workspace."}
+            title={depots.length === 0 && !isAdmin ? "Awaiting depot access" : "No workspaces"}
+            detail={depots.length > 0
+              ? "Create a local workspace to start working."
+              : isAdmin
+                ? "Create a depot and stream before adding a workspace."
+                : "Your account is ready. Ask a studio administrator to grant you a depot role."}
             action={depots.length > 0 ? (
               <button className="primary-button" type="button" onClick={openCreate}>
                 <Plus size={16} /> New Workspace
@@ -191,46 +198,49 @@ export function WorkspaceSelector({
 
       <ConfirmDialog
         open={createOpen}
-        title="Create Workspace"
-        confirmLabel={creating ? "Creating" : "Create Workspace"}
+        title={nativeDesktop ? "Connect a Project Folder" : "Create a Workspace"}
+        confirmLabel={creating ? "Getting things ready…" : "Create & Start"}
         confirmDisabled={!valid || creating}
         onClose={() => !creating && setCreateOpen(false)}
         onConfirm={() => void createWorkspace()}
       >
         <div className="form-stack workspace-form">
+          <div className="workspace-wizard-intro">
+            <span><strong>1</strong> Choose production</span>
+            <span><strong>2</strong> Choose folder</span>
+            <span><strong>3</strong> Start creating</span>
+          </div>
+          <p className="form-helper">
+            {nativeDesktop
+              ? "OpenAsset will connect this folder safely. Nothing is uploaded until you choose Submit Changes."
+              : "This browser workspace is for uploading and reviewing. Use the desktop app when you want a folder to stay in sync automatically."}
+          </p>
           <label>
-            Workspace Name
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="artist-main" />
-          </label>
-          <label>
-            Depot
+            Production
             <select
               value={depotId}
               onChange={(event) => {
                 const nextDepot = event.target.value;
                 setDepotId(nextDepot);
                 setStreamId(streams.find((stream) => stream.depot_id === nextDepot)?.id ?? "");
+                setName(suggestedWorkspaceName(username, depots.find((depot) => depot.id === nextDepot)?.name));
               }}
             >
               {depots.map((depot) => <option key={depot.id} value={depot.id}>{depot.name}</option>)}
             </select>
+            <small>The show, game, or client project you are joining.</small>
           </label>
           <label>
-            Stream
-            <select value={streamId} onChange={(event) => setStreamId(event.target.value)}>
-              {availableStreams.map((stream) => <option key={stream.id} value={stream.id}>{stream.name}</option>)}
-            </select>
-          </label>
-          <label>
-            Local Folder
+            Project Folder
             <span className="path-picker-row">
               <input
+                aria-label="Local Folder"
                 value={localPath}
                 onChange={(event) => setLocalPath(event.target.value)}
-                placeholder="/Projects/MyGame"
-                readOnly={isNativeDesktop()}
+                placeholder={nativeDesktop ? "Choose the folder where you create your work" : "/Projects/MyGame"}
+                readOnly={nativeDesktop}
               />
-              {isNativeDesktop() && (
+              {nativeDesktop && (
                 <button
                   className="secondary-button"
                   type="button"
@@ -240,7 +250,22 @@ export function WorkspaceSelector({
                 </button>
               )}
             </span>
+            <small>Blender, Maya, or Unreal files inside this folder will share the same history.</small>
           </label>
+          <details className="workspace-advanced">
+            <summary>Workspace details</summary>
+            <label>
+              Workspace Name
+              <input value={name} onChange={(event) => setName(event.target.value)} placeholder="artist-main" />
+            </label>
+            <label>
+              Stream
+              <select value={streamId} onChange={(event) => setStreamId(event.target.value)}>
+                {availableStreams.map((stream) => <option key={stream.id} value={stream.id}>{stream.name}</option>)}
+              </select>
+            </label>
+            <small>Most artists can leave these values unchanged.</small>
+          </details>
           {formError && <p className="form-error">{formError}</p>}
         </div>
       </ConfirmDialog>
@@ -254,6 +279,7 @@ export function WorkspaceSelector({
         onConfirm={() => void setupStudio()}
       >
         <div className="form-stack workspace-form">
+          <p className="form-helper">One simple setup creates your production, its main line of work, and your first project folder.</p>
           <label>
             Depot Name
             <input
@@ -283,9 +309,9 @@ export function WorkspaceSelector({
                 value={setupPath}
                 onChange={(event) => setSetupPath(event.target.value)}
                 placeholder="/Projects/MyProduction"
-                readOnly={isNativeDesktop()}
+                readOnly={nativeDesktop}
               />
-              {isNativeDesktop() && (
+              {nativeDesktop && (
                 <button
                   className="secondary-button"
                   type="button"
@@ -301,4 +327,10 @@ export function WorkspaceSelector({
       </ConfirmDialog>
     </main>
   );
+}
+
+function suggestedWorkspaceName(username: string, depotName?: string): string {
+  const artist = username.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "artist";
+  const production = (depotName ?? "main").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "main";
+  return `${artist}-${production}`.slice(0, 64);
 }

@@ -1,5 +1,5 @@
 import { AlertTriangle, LogOut, RefreshCcw, Server, ShieldCheck, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { type FormEvent, useState } from "react";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import type { FileTypeRule, UserSession, Workspace } from "../types/domain";
 
@@ -11,6 +11,7 @@ interface SettingsProps {
   onRefreshFiletypes: () => void;
   onDeleteWorkspace: (deleteLocalFiles: boolean) => Promise<void>;
   onLogout: () => void;
+  onChangePassword: (currentPassword: string, newPassword: string) => Promise<void>;
 }
 
 export function Settings({
@@ -21,10 +22,16 @@ export function Settings({
   onRefreshFiletypes,
   onDeleteWorkspace,
   onLogout,
+  onChangePassword,
 }: SettingsProps) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteLocalFiles, setDeleteLocalFiles] = useState(false);
   const [confirmation, setConfirmation] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordBusy, setPasswordBusy] = useState(false);
+  const [passwordMessage, setPasswordMessage] = useState<{ text: string; error: boolean }>();
   const confirmDisabled = deletingWorkspace
     || (deleteLocalFiles && confirmation !== workspace.name);
 
@@ -34,12 +41,36 @@ export function Settings({
     setDeleteOpen(true);
   }
 
+  async function changePassword(event: FormEvent) {
+    event.preventDefault();
+    if (newPassword !== confirmPassword) {
+      setPasswordMessage({ text: "New passwords do not match.", error: true });
+      return;
+    }
+    setPasswordBusy(true);
+    setPasswordMessage(undefined);
+    try {
+      await onChangePassword(currentPassword, newPassword);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setPasswordMessage({ text: "Password changed successfully.", error: false });
+    } catch (error) {
+      setPasswordMessage({
+        text: error instanceof Error ? error.message : "Password change failed.",
+        error: true,
+      });
+    } finally {
+      setPasswordBusy(false);
+    }
+  }
+
   return (
     <main className="page">
       <header className="page-heading">
         <div>
           <span className="eyebrow">Settings</span>
-          <h1>Desktop Preferences</h1>
+          <h1>Workspace & Account</h1>
         </div>
         <button className="secondary-button" type="button" onClick={onLogout}>
           <LogOut size={17} />
@@ -65,24 +96,74 @@ export function Settings({
             <input value={workspace.local_path} readOnly />
           </label>
         </div>
-        <div className="panel">
+        <form className="panel settings-panel password-panel" onSubmit={(event) => void changePassword(event)}>
           <header className="section-heading">
-            <h2>File Type Rules</h2>
-            <button className="icon-button" type="button" onClick={onRefreshFiletypes} aria-label="Refresh file types">
-              <RefreshCcw size={17} />
-            </button>
+            <h2>Account Security</h2>
+            <ShieldCheck size={18} />
           </header>
-          <div className="compact-list tall-list">
-            {filetypes.map((rule) => (
-              <span key={rule.id ?? rule.name} className="compact-row">
-                <span>
-                  <ShieldCheck size={14} />
-                  {rule.extension ?? rule.directory_prefix ?? rule.name}
-                </span>
-                <span>{rule.lock_required ? "Lock required" : "No lock"}</span>
+          <p className="subtle-copy">Change the password for <strong>{session.username}</strong>.</p>
+          <label>
+            Current password
+            <input
+              type="password"
+              value={currentPassword}
+              onChange={(event) => setCurrentPassword(event.target.value)}
+              autoComplete="current-password"
+              required
+            />
+          </label>
+          <label>
+            New password
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+              autoComplete="new-password"
+              minLength={8}
+              required
+            />
+          </label>
+          <label>
+            Confirm new password
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              autoComplete="new-password"
+              minLength={8}
+              required
+            />
+          </label>
+          {passwordMessage && (
+            <p className={passwordMessage.error ? "form-error" : "form-success"}>{passwordMessage.text}</p>
+          )}
+          <button
+            className="primary-button"
+            type="submit"
+            disabled={passwordBusy || !currentPassword || newPassword.length < 8 || !confirmPassword}
+          >
+            {passwordBusy ? "Changing…" : "Change Password"}
+          </button>
+        </form>
+      </section>
+
+      <section className="panel settings-filetypes-panel">
+        <header className="section-heading">
+          <h2>File Type Rules</h2>
+          <button className="icon-button" type="button" onClick={onRefreshFiletypes} aria-label="Refresh file types">
+            <RefreshCcw size={17} />
+          </button>
+        </header>
+        <div className="compact-list tall-list">
+          {filetypes.map((rule) => (
+            <span key={rule.id ?? rule.name} className="compact-row">
+              <span>
+                <ShieldCheck size={14} />
+                {rule.extension ?? rule.directory_prefix ?? rule.name}
               </span>
-            ))}
-          </div>
+              <span>{rule.lock_required ? "Lock required" : "No lock"}</span>
+            </span>
+          ))}
         </div>
       </section>
 

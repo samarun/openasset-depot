@@ -9,6 +9,7 @@ describe("WorkspaceSelector", () => {
     const onCreate = vi.fn(async () => undefined);
     render(
       <WorkspaceSelector
+        username="artist"
         workspaces={[]}
         depots={[]}
         streams={[]}

@@ -1,6 +1,6 @@
 {
   "name": "openasset-depot-resolve",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "private": true,
   "description": "OpenAsset Depot workflow integration for DaVinci Resolve Studio",
   "main": "main.js"

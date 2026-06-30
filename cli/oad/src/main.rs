@@ -21,13 +21,8 @@ use walkdir::WalkDir;
 #[derive(Parser)]
 #[command(name = "oad", version, about = "OpenAsset Depot CLI")]
 struct Cli {
-    #[arg(
-        long,
-        global = true,
-        env = "OAD_SERVER_URL",
-        default_value = "http://127.0.0.1:8080"
-    )]
-    server: String,
+    #[arg(long, global = true, env = "OAD_SERVER_URL")]
+    server: Option<String>,
     #[arg(long, global = true, value_name = "DIRECTORY")]
     cwd: Option<PathBuf>,
     #[command(subcommand)]
@@ -177,6 +172,16 @@ enum IntegrationCommand {
     Submit {
         #[arg(long, default_value = "Submitted from a DCC integration")]
         description: String,
+    },
+    Preview {
+        path: PathBuf,
+        #[arg(long)]
+        image: PathBuf,
+    },
+    ReviewProxy {
+        path: PathBuf,
+        #[arg(long)]
+        media: PathBuf,
     },
     History {
         path: PathBuf,
@@ -336,6 +341,8 @@ struct SyncPlanEntry {
     size_bytes: i64,
     #[serde(default)]
     deleted: bool,
+    #[serde(default)]
+    preview_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -460,7 +467,9 @@ async fn main() -> Result<()> {
         std::env::set_current_dir(&cwd)?;
     }
     let mut config = load_global_config().await?;
-    config.server_url = cli.server.trim_end_matches('/').to_string();
+    if let Some(server) = cli.server.as_deref() {
+        config.server_url = server.trim_end_matches('/').to_string();
+    }
     if let Ok(token) = std::env::var("OAD_TOKEN") {
         if !token.trim().is_empty() {
             config.token = Some(token);
@@ -1576,6 +1585,8 @@ fn integration_command_name(command: &IntegrationCommand) -> &'static str {
     match command {
         IntegrationCommand::Sync => "sync",
         IntegrationCommand::Submit { .. } => "submit",
+        IntegrationCommand::Preview { .. } => "preview",
+        IntegrationCommand::ReviewProxy { .. } => "review_proxy",
         IntegrationCommand::Context => "context",
         IntegrationCommand::Pending => "pending",
         IntegrationCommand::Status { .. } => "status",
@@ -1642,6 +1653,12 @@ async fn integration(
         IntegrationCommand::Submit { description } => {
             let response = submit_workspace(client, config, Some(&description), progress).await?;
             Ok(serde_json::to_value(response)?)
+        }
+        IntegrationCommand::Preview { path, image } => {
+            integration_preview(client, config, path, image).await
+        }
+        IntegrationCommand::ReviewProxy { path, media } => {
+            integration_review_proxy(client, config, path, media).await
         }
         IntegrationCommand::History { path } => integration_history(client, config, path).await,
         IntegrationCommand::Validate { paths, adapter } => {
@@ -2181,6 +2198,104 @@ async fn integration_history(
     Ok(serde_json::json!({ "path": depot_path, "revisions": entries }))
 }
 
+async fn integration_preview(
+    client: &reqwest::Client,
+    config: &GlobalConfig,
+    path: PathBuf,
+    image: PathBuf,
+) -> Result<serde_json::Value> {
+    let (workspace, workspace_dir) = load_workspace().await?;
+    let _operation_lock = lock_workspace_operation(&workspace_dir)?;
+    let depot_path = depot_path_for_input(&workspace.root, &path)?;
+    let state = load_state(&workspace_dir).await?;
+    let revision_number = state
+        .files
+        .get(&depot_path)
+        .map(|file| file.revision_number)
+        .ok_or_else(|| anyhow!("cannot upload a preview before the asset is submitted"))?;
+    let content_type = match image
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        _ => bail!("preview image must be PNG, JPEG, or WebP"),
+    };
+    let bytes = fs::read(&image)
+        .await
+        .with_context(|| format!("failed to read preview image {}", image.display()))?;
+    let url = format!(
+        "/api/files/preview?workspace_id={}&path={}&revision_number={}",
+        workspace.workspace_id,
+        urlencoding::encode(&depot_path),
+        revision_number
+    );
+    let response = authed_request(
+        config,
+        client
+            .post(api_url(config, &url))
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .body(bytes),
+    )?
+    .send()
+    .await?;
+    parse_response(response).await
+}
+
+async fn integration_review_proxy(
+    client: &reqwest::Client,
+    config: &GlobalConfig,
+    path: PathBuf,
+    media: PathBuf,
+) -> Result<serde_json::Value> {
+    let (workspace, workspace_dir) = load_workspace().await?;
+    let _operation_lock = lock_workspace_operation(&workspace_dir)?;
+    let depot_path = depot_path_for_input(&workspace.root, &path)?;
+    let state = load_state(&workspace_dir).await?;
+    let revision_number = state
+        .files
+        .get(&depot_path)
+        .map(|file| file.revision_number)
+        .ok_or_else(|| anyhow!("cannot upload a review proxy before the asset is submitted"))?;
+    let content_type = match media
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "glb" => "model/gltf-binary",
+        "gltf" => "model/gltf+json",
+        "fbx" => "application/vnd.autodesk.fbx",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        _ => bail!("review proxy must be GLB, glTF, FBX, MP4, or WebM"),
+    };
+    let bytes = fs::read(&media)
+        .await
+        .with_context(|| format!("failed to read review proxy {}", media.display()))?;
+    let url = format!(
+        "/api/reviews/proxy?workspace_id={}&path={}&revision_number={}",
+        workspace.workspace_id,
+        urlencoding::encode(&depot_path),
+        revision_number
+    );
+    let response = authed_request(
+        config,
+        client
+            .post(api_url(config, &url))
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .body(bytes),
+    )?
+    .send()
+    .await?;
+    parse_response(response).await
+}
+
 async fn integration_validate(
     client: &reqwest::Client,
     config: &GlobalConfig,
@@ -2707,5 +2822,44 @@ mod tests {
                 command: IntegrationCommand::Sync,
             }
         ));
+    }
+
+    #[test]
+    fn integration_accepts_portable_review_proxy_media() {
+        let cli = Cli::try_parse_from([
+            "oad",
+            "integration",
+            "review-proxy",
+            "Scenes/Shot.blend",
+            "--media",
+            "/tmp/Shot.glb",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Integration {
+                command: IntegrationCommand::ReviewProxy { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn saved_server_is_used_until_an_explicit_override_is_provided() {
+        let saved = Cli::try_parse_from(["oad", "workspace", "list"]).unwrap();
+        assert_eq!(saved.server, None);
+
+        let overridden = Cli::try_parse_from([
+            "oad",
+            "--server",
+            "https://asset.example.com",
+            "workspace",
+            "list",
+        ])
+        .unwrap();
+        assert_eq!(
+            overridden.server.as_deref(),
+            Some("https://asset.example.com")
+        );
     }
 }

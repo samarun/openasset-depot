@@ -16,6 +16,8 @@ class OpenAssetPanel(nukescripts.PythonPanel):
         global _active_panel
         _active_panel = self
         self.status = nuke.Text_Knob("status", "Status", "Save the script to begin")
+        self.progress = nuke.Progress_Knob("progress", "Progress")
+        self.progress.setValue(0)
         self.refresh = nuke.PyScript_Knob("refresh", "Refresh Status")
         self.checkout = nuke.PyScript_Knob("checkout", "Check Out Script")
         self.sync = nuke.PyScript_Knob("sync", "Sync Latest")
@@ -26,6 +28,7 @@ class OpenAssetPanel(nukescripts.PythonPanel):
         self.revert = nuke.PyScript_Knob("revert", "Revert Checkout")
         for knob in (
             self.status,
+            self.progress,
             self.refresh,
             self.checkout,
             self.sync,
@@ -56,6 +59,9 @@ class OpenAssetPanel(nukescripts.PythonPanel):
     def set_busy(self, busy: bool) -> None:
         for knob in (self.refresh, self.checkout, self.sync, self.validate, self.submit, self.revert):
             knob.setEnabled(not busy)
+
+    def set_progress(self, value: int) -> None:
+        self.progress.setValue(max(0, min(100, int(value))))
 
 
 def create_panel():

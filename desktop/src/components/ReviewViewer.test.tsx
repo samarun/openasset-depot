@@ -1,0 +1,56 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mockFiles } from "../data/mockData";
+import type { ReviewComment } from "../types/domain";
+import { ReviewViewer } from "./ReviewViewer";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("ReviewViewer", () => {
+  it("opens revision feedback and posts a comment", async () => {
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:review") });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    const created: ReviewComment = {
+      id: "comment-1",
+      path: mockFiles[0].path,
+      revision_number: mockFiles[0].revision,
+      author_user_id: "user-1",
+      author: "Artist One",
+      body: "Ease the landing pose.",
+      created_at: "2026-06-30T10:00:00Z",
+    };
+    const createComment = vi.fn(async () => created);
+
+    render(
+      <ReviewViewer
+        file={mockFiles[0]}
+        open
+        onClose={vi.fn()}
+        loadMedia={async () => ({
+          blob: new Blob(["preview"], { type: "image/png" }),
+          contentType: "image/png",
+          source: "preview",
+        })}
+        loadComments={async () => []}
+        createComment={createComment}
+        resolveComment={vi.fn(async (comment) => comment)}
+      />,
+    );
+
+    expect(await screen.findByRole("dialog", { name: `Review ${mockFiles[0].name}` })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pen" })).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("Leave clear, actionable feedback…"), {
+      target: { value: "Ease the landing pose." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Post Comment" }));
+
+    await waitFor(() => expect(createComment).toHaveBeenCalledWith(
+      mockFiles[0],
+      expect.objectContaining({ body: "Ease the landing pose." }),
+    ));
+    expect(await screen.findByText("Ease the landing pose.")).toBeInTheDocument();
+  });
+});

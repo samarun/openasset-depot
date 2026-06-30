@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { UserSession, Workspace } from "../types/domain";
+import { createUuid } from "../utils/uuid";
 import { isNativeDesktop } from "./workspaces";
 
 export type IntegrationCommand =
@@ -55,7 +56,7 @@ export async function runWorkspaceIntegration<T>(
   if (!isNativeDesktop()) {
     return Promise.reject(new Error("This file operation requires the OpenAsset Depot desktop app."));
   }
-  const operationId = crypto.randomUUID();
+  const operationId = createUuid();
   const unlisten = options.onProgress
     ? await listen<IntegrationProgress>("oad://operation-progress", (event) => {
         if (event.payload.operationId === operationId) options.onProgress?.(event.payload);

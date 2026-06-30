@@ -13,6 +13,8 @@ pub mod idempotency;
 pub mod locking;
 pub mod paths;
 pub mod permissions;
+pub mod previews;
+pub mod reviews;
 pub mod storage;
 pub mod streams;
 pub mod sync;

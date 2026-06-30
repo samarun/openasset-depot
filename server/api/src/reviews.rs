@@ -1,0 +1,672 @@
+use std::io::Cursor;
+
+use axum::{
+    body::{Body, Bytes},
+    extract::{Path as AxumPath, Query, State},
+    http::{header, HeaderMap, HeaderValue, Response, StatusCode},
+    Json,
+};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sqlx::{PgPool, Row};
+use uuid::Uuid;
+
+use crate::{
+    api::AppState,
+    audit,
+    changelists::insert_blob_records,
+    error::{AppError, AppResult},
+    paths::normalize_depot_path,
+    workspaces::workspace_for_user,
+};
+
+const MAX_ANNOTATION_BYTES: usize = 128 * 1024;
+const MAX_REVIEW_PROXY_BYTES: usize = 512 * 1024 * 1024;
+
+#[derive(Debug, Deserialize)]
+pub struct ReviewTargetQuery {
+    pub workspace_id: Uuid,
+    pub path: String,
+    pub revision_number: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateReviewCommentRequest {
+    pub workspace_id: Uuid,
+    pub path: String,
+    pub revision_number: i32,
+    pub body: String,
+    pub timecode_ms: Option<i64>,
+    pub frame_number: Option<i32>,
+    pub parent_comment_id: Option<Uuid>,
+    pub annotation: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResolveReviewCommentRequest {
+    pub workspace_id: Uuid,
+    #[serde(default = "default_true")]
+    pub resolved: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReviewCommentResponse {
+    pub id: Uuid,
+    pub path: String,
+    pub revision_number: i32,
+    pub author_user_id: Uuid,
+    pub author: String,
+    pub parent_comment_id: Option<Uuid>,
+    pub body: String,
+    pub timecode_ms: Option<i64>,
+    pub frame_number: Option<i32>,
+    pub annotation: Option<Value>,
+    pub resolved_at: Option<DateTime<Utc>>,
+    pub resolved_by: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReviewProxyResponse {
+    pub path: String,
+    pub revision_number: i32,
+    pub blob_hash: String,
+    pub size_bytes: i64,
+    pub content_type: String,
+}
+
+pub async fn list_comments(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ReviewTargetQuery>,
+) -> AppResult<Json<Vec<ReviewCommentResponse>>> {
+    let user = state.require_user(&headers)?;
+    let workspace = workspace_for_user(&state.db, query.workspace_id, &user).await?;
+    let path = normalize_depot_path(&query.path)?;
+    let revision_id =
+        revision_for_target(&state.db, workspace.stream_id, &path, query.revision_number).await?;
+
+    let rows = sqlx::query(
+        r#"
+        SELECT arc.id, fr.depot_path, fr.revision_number, arc.author_user_id,
+               COALESCE(u.display_name, u.username) AS author,
+               arc.parent_comment_id, arc.body, arc.timecode_ms, arc.frame_number,
+               arc.annotation, arc.resolved_at, arc.resolved_by, arc.created_at
+        FROM asset_review_comments arc
+        JOIN file_revisions fr ON fr.id = arc.revision_id
+        JOIN users u ON u.id = arc.author_user_id
+        WHERE arc.revision_id = $1
+        ORDER BY arc.created_at ASC, arc.id ASC
+        "#,
+    )
+    .bind(revision_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(rows.into_iter().map(comment_from_row).collect()))
+}
+
+pub async fn create_comment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateReviewCommentRequest>,
+) -> AppResult<Json<ReviewCommentResponse>> {
+    let user = state.require_user(&headers)?;
+    let workspace = workspace_for_user(&state.db, request.workspace_id, &user).await?;
+    let path = normalize_depot_path(&request.path)?;
+    let body = request.body.trim();
+    if body.is_empty() || body.chars().count() > 4_000 {
+        return Err(AppError::bad_request(
+            "review comment must contain between 1 and 4000 characters",
+        ));
+    }
+    validate_marker(request.timecode_ms, request.frame_number)?;
+    validate_annotation(request.annotation.as_ref())?;
+    let revision_id = revision_for_target(
+        &state.db,
+        workspace.stream_id,
+        &path,
+        request.revision_number,
+    )
+    .await?;
+
+    if let Some(parent_id) = request.parent_comment_id {
+        let parent_revision: Option<Uuid> =
+            sqlx::query_scalar("SELECT revision_id FROM asset_review_comments WHERE id = $1")
+                .bind(parent_id)
+                .fetch_optional(&state.db)
+                .await?;
+        if parent_revision != Some(revision_id) {
+            return Err(AppError::bad_request(
+                "reply target must belong to the same asset revision",
+            ));
+        }
+    }
+
+    let comment_id: Uuid = sqlx::query_scalar(
+        r#"
+        INSERT INTO asset_review_comments
+            (revision_id, author_user_id, parent_comment_id, body,
+             timecode_ms, frame_number, annotation)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id
+        "#,
+    )
+    .bind(revision_id)
+    .bind(user.user_id)
+    .bind(request.parent_comment_id)
+    .bind(body)
+    .bind(request.timecode_ms)
+    .bind(request.frame_number)
+    .bind(request.annotation)
+    .fetch_one(&state.db)
+    .await?;
+
+    audit::record(
+        &state.db,
+        audit::AuditEvent {
+            actor_user_id: Some(user.user_id),
+            stream_id: Some(workspace.stream_id),
+            workspace_id: Some(workspace.id),
+            depot_path: Some(&path),
+            ..audit::AuditEvent::new(
+                "asset_review_comment_create",
+                serde_json::json!({
+                    "comment_id": comment_id,
+                    "revision_number": request.revision_number,
+                    "timecode_ms": request.timecode_ms,
+                    "frame_number": request.frame_number,
+                }),
+            )
+        },
+    )
+    .await?;
+
+    Ok(Json(comment_by_id(&state.db, comment_id).await?))
+}
+
+pub async fn resolve_comment(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(comment_id): AxumPath<Uuid>,
+    Json(request): Json<ResolveReviewCommentRequest>,
+) -> AppResult<Json<ReviewCommentResponse>> {
+    let user = state.require_user(&headers)?;
+    let workspace = workspace_for_user(&state.db, request.workspace_id, &user).await?;
+    let row = sqlx::query(
+        r#"
+        SELECT fr.stream_id, fr.depot_path, fr.revision_number
+        FROM asset_review_comments arc
+        JOIN file_revisions fr ON fr.id = arc.revision_id
+        WHERE arc.id = $1
+        "#,
+    )
+    .bind(comment_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("review comment not found".to_string()))?;
+    let stream_id: Uuid = row.get("stream_id");
+    if stream_id != workspace.stream_id {
+        return Err(AppError::Forbidden(
+            "review comment is outside this workspace stream".to_string(),
+        ));
+    }
+
+    sqlx::query(
+        r#"
+        UPDATE asset_review_comments
+        SET resolved_at = CASE WHEN $2 THEN now() ELSE NULL END,
+            resolved_by = CASE WHEN $2 THEN $3 ELSE NULL END
+        WHERE id = $1
+        "#,
+    )
+    .bind(comment_id)
+    .bind(request.resolved)
+    .bind(user.user_id)
+    .execute(&state.db)
+    .await?;
+
+    let path: String = row.get("depot_path");
+    let revision_number: i32 = row.get("revision_number");
+    audit::record(
+        &state.db,
+        audit::AuditEvent {
+            actor_user_id: Some(user.user_id),
+            stream_id: Some(workspace.stream_id),
+            workspace_id: Some(workspace.id),
+            depot_path: Some(&path),
+            ..audit::AuditEvent::new(
+                "asset_review_comment_resolve",
+                serde_json::json!({
+                    "comment_id": comment_id,
+                    "revision_number": revision_number,
+                    "resolved": request.resolved,
+                }),
+            )
+        },
+    )
+    .await?;
+
+    Ok(Json(comment_by_id(&state.db, comment_id).await?))
+}
+
+pub async fn download_review_media(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ReviewTargetQuery>,
+) -> AppResult<Response<Body>> {
+    let user = state.require_user(&headers)?;
+    let workspace = workspace_for_user(&state.db, query.workspace_id, &user).await?;
+    let path = normalize_depot_path(&query.path)?;
+    let row = sqlx::query(
+        r#"
+        SELECT blob_hash, size_bytes
+        FROM file_revisions
+        WHERE stream_id = $1 AND depot_path = $2 AND revision_number = $3
+          AND action <> 'delete'
+        "#,
+    )
+    .bind(workspace.stream_id)
+    .bind(&path)
+    .bind(query.revision_number)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("asset revision not found".to_string()))?;
+    let blob_hash: String = row.get("blob_hash");
+    let size_bytes: i64 = row.get("size_bytes");
+    let content_type = review_content_type(&path);
+
+    review_blob_response(&state, &headers, blob_hash, size_bytes, content_type)
+}
+
+pub async fn upload_review_proxy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ReviewTargetQuery>,
+    body: Bytes,
+) -> AppResult<Json<ReviewProxyResponse>> {
+    let user = state.require_user(&headers)?;
+    let workspace = workspace_for_user(&state.db, query.workspace_id, &user).await?;
+    let path = normalize_depot_path(&query.path)?;
+    if body.is_empty() || body.len() > MAX_REVIEW_PROXY_BYTES {
+        return Err(AppError::bad_request(
+            "review proxy must contain between 1 byte and 512 MiB",
+        ));
+    }
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if !matches!(
+        content_type.as_str(),
+        "model/gltf-binary"
+            | "model/gltf+json"
+            | "application/vnd.autodesk.fbx"
+            | "video/mp4"
+            | "video/webm"
+    ) {
+        return Err(AppError::bad_request(
+            "review proxy must be GLB, glTF, FBX, MP4, or WebM",
+        ));
+    }
+    let revision_id =
+        revision_for_target(&state.db, workspace.stream_id, &path, query.revision_number).await?;
+
+    let _storage_lease = state.storage_maintenance.read().await;
+    let manifest = state.storage.put_reader(Cursor::new(body.to_vec())).await?;
+    let mut tx = state.db.begin().await?;
+    insert_blob_records(&mut tx, &manifest).await?;
+    let inserted: Option<Uuid> = sqlx::query_scalar(
+        r#"
+        INSERT INTO revision_review_proxies
+            (revision_id, blob_hash, size_bytes, content_type, created_by)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (revision_id) DO NOTHING
+        RETURNING id
+        "#,
+    )
+    .bind(revision_id)
+    .bind(&manifest.hash)
+    .bind(manifest.size_bytes as i64)
+    .bind(&content_type)
+    .bind(user.user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if inserted.is_none() {
+        let existing_hash: String = sqlx::query_scalar(
+            "SELECT blob_hash FROM revision_review_proxies WHERE revision_id = $1",
+        )
+        .bind(revision_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if existing_hash != manifest.hash {
+            return Err(AppError::conflict(
+                "this immutable revision already has a different review proxy",
+            ));
+        }
+    }
+    tx.commit().await?;
+
+    audit::record(
+        &state.db,
+        audit::AuditEvent {
+            actor_user_id: Some(user.user_id),
+            stream_id: Some(workspace.stream_id),
+            workspace_id: Some(workspace.id),
+            depot_path: Some(&path),
+            ..audit::AuditEvent::new(
+                "review_proxy_upload",
+                serde_json::json!({
+                    "revision_number": query.revision_number,
+                    "blob_hash": manifest.hash,
+                    "content_type": content_type,
+                }),
+            )
+        },
+    )
+    .await?;
+
+    Ok(Json(ReviewProxyResponse {
+        path,
+        revision_number: query.revision_number,
+        blob_hash: manifest.hash,
+        size_bytes: manifest.size_bytes as i64,
+        content_type,
+    }))
+}
+
+pub async fn download_review_proxy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ReviewTargetQuery>,
+) -> AppResult<Response<Body>> {
+    let user = state.require_user(&headers)?;
+    let workspace = workspace_for_user(&state.db, query.workspace_id, &user).await?;
+    let path = normalize_depot_path(&query.path)?;
+    let row = sqlx::query(
+        r#"
+        SELECT rrp.blob_hash, rrp.size_bytes, rrp.content_type
+        FROM file_revisions fr
+        JOIN revision_review_proxies rrp ON rrp.revision_id = fr.id
+        WHERE fr.stream_id = $1 AND fr.depot_path = $2 AND fr.revision_number = $3
+        "#,
+    )
+    .bind(workspace.stream_id)
+    .bind(&path)
+    .bind(query.revision_number)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("asset review proxy not found".to_string()))?;
+    let blob_hash: String = row.get("blob_hash");
+    let size_bytes: i64 = row.get("size_bytes");
+    let content_type: String = row.get("content_type");
+
+    review_blob_response(&state, &headers, blob_hash, size_bytes, &content_type)
+}
+
+fn review_blob_response(
+    state: &AppState,
+    request_headers: &HeaderMap,
+    blob_hash: String,
+    size_bytes: i64,
+    content_type: &str,
+) -> AppResult<Response<Body>> {
+    let total_size =
+        u64::try_from(size_bytes).map_err(|_| AppError::internal("invalid review media size"))?;
+    let range = requested_byte_range(request_headers, total_size)?;
+    let (body, content_length, content_range) = match range {
+        Some((start, end)) => (
+            Body::from_stream(state.storage.stream_blob_range(blob_hash, start, end)),
+            end - start + 1,
+            Some(format!("bytes {start}-{end}/{total_size}")),
+        ),
+        None => (
+            Body::from_stream(state.storage.stream_blob(blob_hash)),
+            total_size,
+            None,
+        ),
+    };
+    let mut response = Response::new(body);
+    if content_range.is_some() {
+        *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+    }
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(content_type)
+            .map_err(|_| AppError::internal("invalid review media content type"))?,
+    );
+    response.headers_mut().insert(
+        header::CONTENT_LENGTH,
+        HeaderValue::from_str(&content_length.to_string())
+            .map_err(|_| AppError::internal("invalid review media size"))?,
+    );
+    response
+        .headers_mut()
+        .insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    if let Some(content_range) = content_range {
+        response.headers_mut().insert(
+            header::CONTENT_RANGE,
+            HeaderValue::from_str(&content_range)
+                .map_err(|_| AppError::internal("invalid review media range"))?,
+        );
+    }
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=31536000, immutable"),
+    );
+    response.headers_mut().insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    Ok(response)
+}
+
+fn requested_byte_range(headers: &HeaderMap, total_size: u64) -> AppResult<Option<(u64, u64)>> {
+    let Some(value) = headers.get(header::RANGE) else {
+        return Ok(None);
+    };
+    if total_size == 0 {
+        return Err(AppError::bad_request(
+            "empty review media has no byte ranges",
+        ));
+    }
+    let value = value
+        .to_str()
+        .map_err(|_| AppError::bad_request("invalid Range header"))?;
+    let value = value
+        .strip_prefix("bytes=")
+        .ok_or_else(|| AppError::bad_request("only byte ranges are supported"))?;
+    if value.contains(',') {
+        return Err(AppError::bad_request(
+            "multiple byte ranges are not supported",
+        ));
+    }
+    let (start, end) = value
+        .split_once('-')
+        .ok_or_else(|| AppError::bad_request("invalid byte range"))?;
+    let (start, end) = if start.is_empty() {
+        let suffix: u64 = end
+            .parse()
+            .map_err(|_| AppError::bad_request("invalid byte range suffix"))?;
+        if suffix == 0 {
+            return Err(AppError::bad_request("byte range suffix must be positive"));
+        }
+        (
+            total_size.saturating_sub(suffix.min(total_size)),
+            total_size - 1,
+        )
+    } else {
+        let start: u64 = start
+            .parse()
+            .map_err(|_| AppError::bad_request("invalid byte range start"))?;
+        let end = if end.is_empty() {
+            total_size - 1
+        } else {
+            end.parse()
+                .map_err(|_| AppError::bad_request("invalid byte range end"))?
+        };
+        (start, end.min(total_size - 1))
+    };
+    if start >= total_size || end < start {
+        return Err(AppError::bad_request("byte range is outside the asset"));
+    }
+    Ok(Some((start, end)))
+}
+
+async fn revision_for_target(
+    db: &PgPool,
+    stream_id: Uuid,
+    path: &str,
+    revision_number: i32,
+) -> AppResult<Uuid> {
+    if revision_number <= 0 {
+        return Err(AppError::bad_request("revision_number must be positive"));
+    }
+    sqlx::query_scalar(
+        r#"
+        SELECT id FROM file_revisions
+        WHERE stream_id = $1 AND depot_path = $2 AND revision_number = $3
+          AND action <> 'delete'
+        "#,
+    )
+    .bind(stream_id)
+    .bind(path)
+    .bind(revision_number)
+    .fetch_optional(db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("asset revision not found".to_string()))
+}
+
+async fn comment_by_id(db: &PgPool, comment_id: Uuid) -> AppResult<ReviewCommentResponse> {
+    let row = sqlx::query(
+        r#"
+        SELECT arc.id, fr.depot_path, fr.revision_number, arc.author_user_id,
+               COALESCE(u.display_name, u.username) AS author,
+               arc.parent_comment_id, arc.body, arc.timecode_ms, arc.frame_number,
+               arc.annotation, arc.resolved_at, arc.resolved_by, arc.created_at
+        FROM asset_review_comments arc
+        JOIN file_revisions fr ON fr.id = arc.revision_id
+        JOIN users u ON u.id = arc.author_user_id
+        WHERE arc.id = $1
+        "#,
+    )
+    .bind(comment_id)
+    .fetch_optional(db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("review comment not found".to_string()))?;
+    Ok(comment_from_row(row))
+}
+
+fn comment_from_row(row: sqlx::postgres::PgRow) -> ReviewCommentResponse {
+    ReviewCommentResponse {
+        id: row.get("id"),
+        path: row.get("depot_path"),
+        revision_number: row.get("revision_number"),
+        author_user_id: row.get("author_user_id"),
+        author: row.get("author"),
+        parent_comment_id: row.get("parent_comment_id"),
+        body: row.get("body"),
+        timecode_ms: row.get("timecode_ms"),
+        frame_number: row.get("frame_number"),
+        annotation: row.get("annotation"),
+        resolved_at: row.get("resolved_at"),
+        resolved_by: row.get("resolved_by"),
+        created_at: row.get("created_at"),
+    }
+}
+
+fn validate_marker(timecode_ms: Option<i64>, frame_number: Option<i32>) -> AppResult<()> {
+    if timecode_ms.is_some_and(|value| value < 0) {
+        return Err(AppError::bad_request("timecode_ms cannot be negative"));
+    }
+    if frame_number.is_some_and(|value| value < 0) {
+        return Err(AppError::bad_request("frame_number cannot be negative"));
+    }
+    Ok(())
+}
+
+fn validate_annotation(annotation: Option<&Value>) -> AppResult<()> {
+    let Some(annotation) = annotation else {
+        return Ok(());
+    };
+    if !annotation.is_object() {
+        return Err(AppError::bad_request("annotation must be a JSON object"));
+    }
+    if serde_json::to_vec(annotation)?.len() > MAX_ANNOTATION_BYTES {
+        return Err(AppError::bad_request("annotation exceeds 128 KiB"));
+    }
+    Ok(())
+}
+
+fn review_content_type(path: &str) -> &'static str {
+    let extension = path
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_ascii_lowercase())
+        .unwrap_or_default();
+    match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "mp4" | "m4v" => "video/mp4",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" | "oga" => "audio/ogg",
+        "glb" => "model/gltf-binary",
+        "gltf" => "model/gltf+json",
+        "fbx" => "application/vnd.autodesk.fbx",
+        _ => "application/octet-stream",
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::{header, HeaderMap, HeaderValue};
+    use serde_json::json;
+
+    use super::{requested_byte_range, review_content_type, validate_annotation, validate_marker};
+
+    #[test]
+    fn maps_reviewable_media_types_without_exposing_active_content() {
+        assert_eq!(review_content_type("Models/Hero.glb"), "model/gltf-binary");
+        assert_eq!(review_content_type("Playblast/shot.webm"), "video/webm");
+        assert_eq!(
+            review_content_type("Docs/page.html"),
+            "application/octet-stream"
+        );
+    }
+
+    #[test]
+    fn validates_review_markers_and_annotation_shape() {
+        assert!(validate_marker(Some(1_250), Some(30)).is_ok());
+        assert!(validate_marker(Some(-1), None).is_err());
+        assert!(validate_annotation(Some(&json!({"tool": "pen", "points": []}))).is_ok());
+        assert!(validate_annotation(Some(&json!([1, 2, 3]))).is_err());
+    }
+
+    #[test]
+    fn parses_browser_media_ranges() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=100-199"));
+        assert_eq!(
+            requested_byte_range(&headers, 1_000).unwrap(),
+            Some((100, 199))
+        );
+        headers.insert(header::RANGE, HeaderValue::from_static("bytes=-50"));
+        assert_eq!(
+            requested_byte_range(&headers, 1_000).unwrap(),
+            Some((950, 999))
+        );
+    }
+}

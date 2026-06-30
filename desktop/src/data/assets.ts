@@ -70,6 +70,8 @@ export function assetsFromSyncPlan(
       owner: lock ? (lock.workspace_id === workspace.id ? username : lock.user_id) : undefined,
       statuses,
       previewTone: previewToneFor(extension),
+      previewAvailable: entry.preview_available,
+      reviewProxyAvailable: entry.review_proxy_available,
       dependencies: [],
       source: "backend",
     };
