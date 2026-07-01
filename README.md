@@ -15,6 +15,7 @@ integrations. Core locking, permissions, validation, submit, sync, and audit
 rules stay on the server; host plug-ins use the stable `oad integration` protocol.
 
 Live demo: https://asset.arunsamuel.com (i'm runnong this on my home Linux System, there might be a downtime if there's a power outage)
+
 username: admin
 password: asset@1234
 
