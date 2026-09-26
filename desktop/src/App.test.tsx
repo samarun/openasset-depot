@@ -14,7 +14,8 @@ describe("App", () => {
 
   it("renders the login screen without a stored session", () => {
     render(<App />);
-    expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Welcome back" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Sign up" })).toBeInTheDocument();
   });
 
   it("uses the compact demo status when the server cannot be reached", async () => {

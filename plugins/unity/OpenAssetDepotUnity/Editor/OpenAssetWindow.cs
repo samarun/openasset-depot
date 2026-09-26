@@ -20,8 +20,8 @@ namespace OpenAssetDepot.Unity
         internal static void ShowWindow()
         {
             var window = GetWindow<OpenAssetWindow>();
-            window.titleContent = new GUIContent("OpenAsset");
-            window.minSize = new Vector2(360, 390);
+            window.titleContent = new GUIContent(OpenAssetWords.ProductName);
+            window.minSize = new Vector2(360, 460);
             window.Show();
         }
 
@@ -39,7 +39,7 @@ namespace OpenAssetDepot.Unity
         private void OnGUI()
         {
             EditorGUILayout.Space(8);
-            EditorGUILayout.LabelField("OPENASSET DEPOT", EditorStyles.miniBoldLabel);
+            EditorGUILayout.LabelField(OpenAssetWords.ProductName, EditorStyles.miniBoldLabel);
             EditorGUILayout.LabelField(_assetPath ?? "No asset selected", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(_status, MessageType.None);
 
@@ -47,19 +47,24 @@ namespace OpenAssetDepot.Unity
             {
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    if (GUILayout.Button("Refresh Status", GUILayout.Height(28))) RunStatus();
-                    if (GUILayout.Button("Check Out", GUILayout.Height(28))) RunCheckout();
+                    if (GUILayout.Button(OpenAssetWords.Refresh, GUILayout.Height(28))) RunStatus();
+                    if (GUILayout.Button(OpenAssetWords.Checkout, GUILayout.Height(28))) RunCheckout();
                 }
-                if (GUILayout.Button("Add Asset + .meta", GUILayout.Height(28))) RunAdd();
-                if (GUILayout.Button("Validate Asset", GUILayout.Height(28))) RunValidate();
-                if (GUILayout.Button("Revert Checkout", GUILayout.Height(28))) RunRevert();
+                if (GUILayout.Button(OpenAssetWords.Add, GUILayout.Height(28))) RunAdd();
+                if (GUILayout.Button(OpenAssetWords.Validate, GUILayout.Height(28))) RunValidate();
+                if (GUILayout.Button(OpenAssetWords.Revert, GUILayout.Height(28))) RunRevert();
             }
             EditorGUILayout.Space(8);
             using (new EditorGUI.DisabledScope(_busy))
             {
-                if (GUILayout.Button("Sync Latest", GUILayout.Height(30))) RunSync();
-                _description = EditorGUILayout.TextField("Description", _description);
-                if (GUILayout.Button("Submit Changes", GUILayout.Height(32))) RunSubmit();
+                if (GUILayout.Button(OpenAssetWords.Sync, GUILayout.Height(30))) RunSync();
+                _description = EditorGUILayout.TextField(OpenAssetWords.DescriptionField, _description);
+                if (GUILayout.Button(OpenAssetWords.Submit, GUILayout.Height(32))) RunSubmit();
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (GUILayout.Button(OpenAssetWords.Shelve, GUILayout.Height(28))) RunShelve();
+                    if (GUILayout.Button(OpenAssetWords.Unshelve, GUILayout.Height(28))) RunUnshelve();
+                }
             }
             EditorGUILayout.Space(8);
             if (GUILayout.Button("Open Settings")) SettingsService.OpenProjectSettings("Project/OpenAsset Depot");
@@ -115,7 +120,7 @@ namespace OpenAssetDepot.Unity
 
         private async void RunRevert()
         {
-            if (!EditorUtility.DisplayDialog("Revert Checkout",
+            if (!EditorUtility.DisplayDialog(OpenAssetWords.Revert,
                     "Remove this asset from the pending changelist and release its lock? The local file is preserved.",
                     "Revert", "Cancel")) return;
             await Run(async () => "Reverted checkout for " + (await OpenAssetCli.RevertAsync(_assetPath)).path);
@@ -146,6 +151,26 @@ namespace OpenAssetDepot.Unity
             });
         }
 
+        private async void RunShelve()
+        {
+            await Run(async () =>
+            {
+                var result = await OpenAssetCli.ShelveAsync();
+                return $"Shelved {(result.files != null ? result.files.Length : 0)} file(s)";
+            });
+        }
+
+        private async void RunUnshelve()
+        {
+            await Run(async () =>
+            {
+                var result = await OpenAssetCli.UnshelveAsync();
+                await Task.Yield();
+                AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+                return $"Restored {result.restored_count} file(s).";
+            });
+        }
+
         private async Task Run(Func<Task<string>> operation)
         {
             if (_busy) return;
@@ -165,13 +190,17 @@ namespace OpenAssetDepot.Unity
             return scene.IsValid() && !string.IsNullOrEmpty(scene.path) ? scene.path : null;
         }
 
+        // Mirrors status_label in plugins/common/openasset_depot_bridge/words.py,
+        // including its precedence: another artist's lock outranks the caller's
+        // own pending edit because it is the part they cannot resolve alone.
         private static string FormatStatus(FileStatus status)
         {
-            var values = new List<string> { ObjectNames.NicifyVariableName(status.local_state) };
-            if (status.needs_sync) values.Add("Needs Sync");
-            if (status.lock_state == "mine") values.Add("Checked Out by Me");
-            else if (status.lock_state == "other") values.Add("Checked Out Elsewhere");
-            return string.Join(" | ", values);
+            if (status.lock_state == "other") return OpenAssetWords.InUse;
+            if (status.pending_action == "delete") return OpenAssetWords.MarkedForDelete;
+            if (status.pending_action == "add" || status.local_state == "untracked") return OpenAssetWords.NewFile;
+            if (!string.IsNullOrEmpty(status.pending_action)) return OpenAssetWords.ReadyToSubmit;
+            if (status.lock_state == "mine") return OpenAssetWords.CheckedOut;
+            return status.needs_sync ? OpenAssetWords.NeedsSync : OpenAssetWords.UpToDate;
         }
 
         private static int Count(Array values) => values != null ? values.Length : 0;

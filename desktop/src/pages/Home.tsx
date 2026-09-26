@@ -10,6 +10,8 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { AssetCard } from "../components/AssetCard";
+import { FirstSyncGuide } from "../components/FirstSyncGuide";
+import { isLockHeldBy, resolvePrimaryAction } from "../data/primaryAction";
 import type { AssetFile, Changelist, LockInfo, ViewKey, Workspace } from "../types/domain";
 
 interface HomeProps {
@@ -23,6 +25,10 @@ interface HomeProps {
   onSync: () => void;
   onSubmit: () => void;
   busy?: boolean;
+  loadPreview?: (file: AssetFile) => Promise<string | undefined>;
+  /** Shows the first-run guide until the workspace has synced or the artist dismisses it. */
+  showFirstSyncGuide?: boolean;
+  onDismissFirstSyncGuide?: () => void;
 }
 
 interface WorkItem {
@@ -45,23 +51,27 @@ export function Home({
   onSync,
   onSubmit,
   busy = false,
+  loadPreview,
+  showFirstSyncGuide = false,
+  onDismissFirstSyncGuide,
 }: HomeProps) {
   const needsSync = files.filter((file) => file.statuses.includes("Needs Sync"));
   const modified = files.filter((file) => file.statuses.some((status) =>
     status === "Ready to Submit" || status === "New File" || status === "Marked for Delete"
   ));
-  const isLockedByMe = (lock: LockInfo) =>
-    workspace?.id === "demo-workspace" ? lock.user_id === currentUser : lock.workspace_id === workspace?.id;
+  const isLockedByMe = (lock: LockInfo) => isLockHeldBy(lock, workspace, currentUser);
   const lockedByMe = locks.filter(isLockedByMe);
   const lockedByOthers = locks.filter((lock) => !isLockedByMe(lock));
   const warnings = changelists.reduce((count, change) => count + change.warnings.length, 0);
-  const primaryAction = needsSync.length > 0
-    ? { label: "Sync Latest", icon: UploadCloud, run: onSync }
-    : modified.length > 0
-      ? { label: "Submit Changes", icon: Send, run: onSubmit }
-      : lockedByOthers.length > 0
-        ? { label: "View Locks", icon: Lock, run: () => onNavigate("locks") }
-        : { label: "Open Assets", icon: FolderOpen, run: () => onNavigate("workspace") };
+  const primaryAction = resolvePrimaryAction({
+    files,
+    locks,
+    workspace,
+    currentUser,
+    onSync,
+    onSubmit,
+    onNavigate,
+  });
   const PrimaryIcon = primaryAction.icon;
   const workItems = ([
     {
@@ -126,6 +136,15 @@ export function Home({
         </div>
       </section>
 
+      {showFirstSyncGuide && workspace && (
+        <FirstSyncGuide
+          workspace={workspace}
+          busy={busy}
+          onSync={onSync}
+          onDismiss={() => onDismissFirstSyncGuide?.()}
+        />
+      )}
+
       <section className="production-pulse" aria-label="Production pulse">
         <div className="pulse-summary">
           <span>Production Pulse</span>
@@ -144,13 +163,13 @@ export function Home({
               <h2>Continue Working</h2>
             </div>
             <button className="text-button" type="button" onClick={() => onNavigate("workspace")}>
-              Open Asset Browser <ChevronRight size={15} />
+              <span>Open Asset Browser</span><ChevronRight size={15} />
             </button>
           </header>
           {files.length > 0 ? (
             <div className="asset-grid studio-asset-grid">
               {files.slice(0, 3).map((file) => (
-                <AssetCard key={file.id} file={file} onSelect={onSelectFile} />
+                <AssetCard key={file.id} file={file} onSelect={onSelectFile} loadPreview={loadPreview} />
               ))}
             </div>
           ) : (

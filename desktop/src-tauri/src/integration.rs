@@ -51,6 +51,16 @@ struct OperationProgressEvent {
     message: String,
     completed: Option<u64>,
     total: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    files_completed: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    files_total: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bytes_completed: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bytes_total: Option<u64>,
 }
 
 #[tauri::command]
@@ -171,7 +181,10 @@ fn validate_request(request: &IntegrationRequest) -> Result<(), String> {
         "checkout" | "add" | "delete" | "lock" | "unlock" | "revert" | "history"
     );
     let multi_path = matches!(request.command.as_str(), "status" | "validate");
-    let no_path = matches!(request.command.as_str(), "context" | "pending" | "sync" | "submit");
+    let no_path = matches!(
+        request.command.as_str(),
+        "context" | "pending" | "sync" | "submit" | "shelve" | "unshelve"
+    );
     if !single_path && !multi_path && !no_path {
         return Err(format!("Unsupported integration command: {}", request.command));
     }
@@ -300,6 +313,14 @@ where
                         .to_string(),
                     completed: value.get("completed").and_then(Value::as_u64),
                     total: value.get("total").and_then(Value::as_u64),
+                    path: value
+                        .get("path")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    files_completed: value.get("files_completed").and_then(Value::as_u64),
+                    files_total: value.get("files_total").and_then(Value::as_u64),
+                    bytes_completed: value.get("bytes_completed").and_then(Value::as_u64),
+                    bytes_total: value.get("bytes_total").and_then(Value::as_u64),
                 };
                 let _ = app.emit("oad://operation-progress", event);
             }

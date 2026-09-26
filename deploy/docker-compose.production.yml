@@ -17,6 +17,7 @@ services:
       OAD_REQUEST_TIMEOUT_SECONDS: ${OAD_REQUEST_TIMEOUT_SECONDS:-1800}
       OAD_CORS_ALLOWED_ORIGINS: https://${OAD_DOMAIN:?set OAD_DOMAIN},tauri://localhost,http://tauri.localhost
       OAD_RUN_MIGRATIONS: ${OAD_RUN_MIGRATIONS:-true}
+      OAD_ALLOW_SIGNUPS: ${OAD_ALLOW_SIGNUPS:-false}
       RUST_LOG: ${RUST_LOG:-openasset_api=info,tower_http=info}
     depends_on:
       postgres:

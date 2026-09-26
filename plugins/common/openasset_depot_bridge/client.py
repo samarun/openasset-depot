@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import shutil
 import subprocess
+import sys
 import tempfile
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence
 
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 DEFAULT_TIMEOUT_SECONDS = 120
 LONG_OPERATION_TIMEOUT_SECONDS = 30 * 60
 DEFAULT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024
@@ -24,6 +28,42 @@ class BridgeError(RuntimeError):
 
 class BridgeProtocolError(BridgeError):
     """The CLI response did not match the integration protocol."""
+
+
+@dataclass(frozen=True)
+class OperationProgress:
+    operation: str
+    phase: str
+    message: str
+    completed: int
+    total: int
+    # Per-file transfer detail. These stay None when the CLI does not know a
+    # value yet, so panels can distinguish "zero" from "not reported".
+    path: Optional[str] = None
+    files_completed: Optional[int] = None
+    files_total: Optional[int] = None
+    bytes_completed: Optional[int] = None
+    bytes_total: Optional[int] = None
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "OperationProgress":
+        def optional_int(key: str) -> Optional[int]:
+            value = payload.get(key)
+            return None if value is None else int(value)
+
+        path = payload.get("path")
+        return cls(
+            operation=str(payload.get("operation", "operation")),
+            phase=str(payload.get("phase", "working")),
+            message=str(payload.get("message", "Working")),
+            completed=int(payload.get("completed", 0)),
+            total=max(1, int(payload.get("total", 100))),
+            path=None if path is None else str(path),
+            files_completed=optional_int("files_completed"),
+            files_total=optional_int("files_total"),
+            bytes_completed=optional_int("bytes_completed"),
+            bytes_total=optional_int("bytes_total"),
+        )
 
 
 @dataclass(frozen=True)
@@ -96,6 +136,7 @@ class BridgeClient:
         timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
         max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
         environment: Optional[Mapping[str, str]] = None,
+        progress_callback: Optional[Callable[[OperationProgress], None]] = None,
     ) -> None:
         self.workspace = find_workspace(workspace)
         self.cli_path = _resolve_cli(cli_path)
@@ -103,6 +144,7 @@ class BridgeClient:
         self.timeout_seconds = max(1, int(timeout_seconds))
         self.max_output_bytes = max(1024, int(max_output_bytes))
         self.environment = dict(environment or {})
+        self.progress_callback = progress_callback
 
     def context(self) -> WorkspaceContext:
         return WorkspaceContext.from_payload(self._invoke("context"))
@@ -158,6 +200,46 @@ class BridgeClient:
             timeout_seconds=timeout_seconds,
         )
 
+    def shelve(self, timeout_seconds: Optional[int] = None) -> Dict[str, Any]:
+        return self._invoke("shelve", timeout_seconds=timeout_seconds)
+
+    def unshelve(self, timeout_seconds: Optional[int] = None) -> Dict[str, Any]:
+        return self._invoke("unshelve", timeout_seconds=timeout_seconds)
+
+    def upload_preview(
+        self,
+        path: os.PathLike[str] | str,
+        image: os.PathLike[str] | str,
+    ) -> Dict[str, Any]:
+        return self._invoke(
+            "preview",
+            str(Path(path)),
+            "--image",
+            str(Path(image)),
+        )
+
+    def upload_review_proxy(
+        self,
+        path: os.PathLike[str] | str,
+        media: os.PathLike[str] | str,
+        frame_rate: Optional[str] = None,
+        start_frame: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        args = [
+            "review-proxy",
+            str(Path(path)),
+            "--media",
+            str(Path(media)),
+        ]
+        if frame_rate:
+            args.extend(["--frame-rate", frame_rate])
+            if start_frame is not None:
+                args.extend(["--start-frame", str(start_frame)])
+        return self._invoke(
+            *args,
+            timeout_seconds=LONG_OPERATION_TIMEOUT_SECONDS,
+        )
+
     def history(self, path: os.PathLike[str] | str) -> Dict[str, Any]:
         return self._invoke("history", str(Path(path)))
 
@@ -181,23 +263,23 @@ class BridgeClient:
         command = [str(self.cli_path)]
         if self.server_url:
             command.extend(["--server", self.server_url])
-        command.extend(["integration", *arguments])
+        command.extend(["integration", "--protocol-version", "2", *arguments])
         environment = os.environ.copy()
         environment.update(self.environment)
         effective_timeout = timeout_seconds or self.timeout_seconds
-        if arguments and arguments[0] in {"sync", "submit"}:
+        if arguments and arguments[0] in {"sync", "submit", "shelve", "unshelve"}:
             effective_timeout = max(effective_timeout, LONG_OPERATION_TIMEOUT_SECONDS)
-        stdout, stderr, return_code = _run_bounded(
+        envelope, stderr, return_code = _run_protocol_v2(
             command,
             cwd=self.workspace,
             environment=environment,
             timeout_seconds=effective_timeout,
             max_output_bytes=self.max_output_bytes,
+            progress_callback=self.progress_callback,
         )
-        envelope = _parse_envelope(stdout)
         if return_code != 0 or not envelope.get("ok"):
             message = envelope.get("error") or stderr.strip() or "OpenAsset operation failed."
-            raise BridgeError(str(message))
+            raise BridgeError(_friendly_error(str(message)))
         data = envelope.get("data")
         if not isinstance(data, dict):
             raise BridgeProtocolError("OpenAsset CLI returned an invalid data payload.")
@@ -215,6 +297,23 @@ def find_workspace(start: os.PathLike[str] | str) -> Path:
     raise BridgeError(f"{path} is not inside an OpenAsset Depot workspace.")
 
 
+def _friendly_error(message: str) -> str:
+    lowered = message.lower()
+    if "expiredsignature" in lowered or "signature has expired" in lowered:
+        return (
+            "Your OpenAsset session expired. Open the OpenAsset Depot desktop app, "
+            "sign out, and sign in again; then retry this action."
+        )
+    if "401 unauthorized" in lowered or "authenticationerror" in lowered:
+        return (
+            "OpenAsset needs you to sign in again. Open the OpenAsset Depot desktop app, "
+            "sign in, and retry this action."
+        )
+    if "failed to connect" in lowered or "connection refused" in lowered:
+        return "OpenAsset cannot reach the server. Check your connection and try again."
+    return message
+
+
 def _resolve_cli(cli_path: Optional[os.PathLike[str] | str]) -> Path:
     configured = cli_path or os.environ.get("OAD_CLI")
     if configured:
@@ -222,39 +321,122 @@ def _resolve_cli(cli_path: Optional[os.PathLike[str] | str]) -> Path:
         if resolved.is_file():
             return resolved
         raise BridgeError(f"OpenAsset CLI was not found at {resolved}.")
+    for candidate in _desktop_cli_candidates():
+        if candidate.is_file():
+            return candidate.resolve()
     discovered = shutil.which("oad")
     if discovered:
         return Path(discovered).resolve()
     raise BridgeError("OpenAsset CLI is not installed or available on PATH.")
 
 
-def _run_bounded(
+def _desktop_cli_candidates() -> List[Path]:
+    home = Path.home()
+    if sys.platform == "darwin":
+        return [
+            Path("/Applications/OpenAsset Depot.app/Contents/MacOS/oad"),
+            home / "Applications" / "OpenAsset Depot.app" / "Contents" / "MacOS" / "oad",
+        ]
+    if sys.platform == "win32":
+        roots = [
+            os.environ.get("LOCALAPPDATA"),
+            os.environ.get("ProgramFiles"),
+        ]
+        return [Path(root) / "OpenAsset Depot" / "oad.exe" for root in roots if root]
+    return [
+        home / ".local" / "lib" / "openasset-depot" / "oad",
+        Path("/opt/openasset-depot/oad"),
+    ]
+
+
+def _run_protocol_v2(
     command: Sequence[str],
     *,
     cwd: Path,
     environment: Mapping[str, str],
     timeout_seconds: int,
     max_output_bytes: int,
-) -> tuple[str, str, int]:
-    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+    progress_callback: Optional[Callable[[OperationProgress], None]],
+) -> tuple[Dict[str, Any], str, int]:
+    with tempfile.TemporaryFile() as stderr_file:
         process = subprocess.Popen(
             list(command),
             cwd=str(cwd),
             env=dict(environment),
             stdin=subprocess.DEVNULL,
-            stdout=stdout_file,
+            stdout=subprocess.PIPE,
             stderr=stderr_file,
             shell=False,
         )
+        if process.stdout is None:
+            process.kill()
+            raise BridgeProtocolError("OpenAsset CLI stdout could not be captured.")
+
+        lines: queue.Queue[Optional[bytes]] = queue.Queue()
+
+        def read_lines() -> None:
+            try:
+                for line in iter(process.stdout.readline, b""):
+                    lines.put(line)
+            finally:
+                lines.put(None)
+
+        reader = threading.Thread(target=read_lines, name="openasset-progress", daemon=True)
+        reader.start()
+        deadline = time.monotonic() + timeout_seconds
+        retained_bytes = 0
+        result: Optional[Dict[str, Any]] = None
         try:
-            return_code = process.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired as error:
+            stream_open = True
+            while stream_open:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise BridgeError(f"OpenAsset operation timed out after {timeout_seconds} seconds.")
+                try:
+                    line = lines.get(timeout=min(0.1, remaining))
+                except queue.Empty:
+                    if process.poll() is not None and not reader.is_alive():
+                        break
+                    continue
+                if line is None:
+                    stream_open = False
+                    continue
+                retained_bytes += len(line)
+                if retained_bytes > max_output_bytes:
+                    raise BridgeProtocolError(
+                        f"OpenAsset CLI stdout exceeded the {max_output_bytes}-byte safety limit."
+                    )
+                payload = _parse_protocol_line(line)
+                message_type = payload.get("type")
+                if message_type == "progress":
+                    if progress_callback:
+                        try:
+                            progress_callback(OperationProgress.from_payload(payload))
+                        except Exception:
+                            # UI reporting is optional and must never interrupt a file operation.
+                            pass
+                elif message_type == "result":
+                    result = payload
+                else:
+                    raise BridgeProtocolError("OpenAsset CLI returned an unsupported protocol message.")
+
+            remaining = max(0.01, deadline - time.monotonic())
+            return_code = process.wait(timeout=remaining)
+        except (subprocess.TimeoutExpired, BridgeError) as error:
             process.kill()
             process.wait()
-            raise BridgeError(f"OpenAsset operation timed out after {timeout_seconds} seconds.") from error
-        stdout = _read_bounded(stdout_file, max_output_bytes, "stdout")
+            if isinstance(error, subprocess.TimeoutExpired):
+                raise BridgeError(f"OpenAsset operation timed out after {timeout_seconds} seconds.") from error
+            raise
+        finally:
+            process.stdout.close()
+            reader.join(timeout=1)
+
         stderr = _read_bounded(stderr_file, max_output_bytes, "stderr")
-        return stdout, stderr, return_code
+        if result is None:
+            detail = stderr.strip() or "OpenAsset CLI returned no result."
+            raise BridgeProtocolError(detail)
+        return result, stderr, return_code
 
 
 def _read_bounded(file_object: Any, limit: int, label: str) -> str:
@@ -265,9 +447,9 @@ def _read_bounded(file_object: Any, limit: int, label: str) -> str:
     return payload.decode("utf-8", errors="replace")
 
 
-def _parse_envelope(stdout: str) -> Dict[str, Any]:
+def _parse_protocol_line(line: bytes) -> Dict[str, Any]:
     try:
-        payload = json.loads(stdout)
+        payload = json.loads(line.decode("utf-8"))
     except json.JSONDecodeError as error:
         raise BridgeProtocolError("OpenAsset CLI did not return valid JSON.") from error
     if not isinstance(payload, dict) or payload.get("protocol_version") != PROTOCOL_VERSION:

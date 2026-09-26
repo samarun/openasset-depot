@@ -32,6 +32,7 @@ if [[ ! -f "${ENV_FILE}" ]]; then
     printf 'OAD_CHUNK_SIZE_BYTES=4194304\n'
     printf 'OAD_REQUEST_TIMEOUT_SECONDS=1800\n'
     printf 'OAD_RUN_MIGRATIONS=true\n'
+    printf 'OAD_ALLOW_SIGNUPS=false\n'
     printf 'POSTGRES_DB=openasset\n'
     printf 'POSTGRES_USER=openasset\n'
     printf 'POSTGRES_PASSWORD=%s\n' "${POSTGRES_SECRET}"

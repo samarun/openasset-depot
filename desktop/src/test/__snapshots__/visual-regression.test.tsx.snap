@@ -1,0 +1,2327 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`visual regression baseline > renders My Work with pending sync and lock activity 1`] = `
+<main
+  class="page studio-home"
+>
+  <section
+    aria-labelledby="workspace-title"
+    class="production-header"
+  >
+    <div
+      class="production-header-main"
+    >
+      <span
+        class="production-kicker"
+      >
+        <svg
+          class="lucide lucide-circle-dot"
+          fill="none"
+          height="13"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="13"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <circle
+            cx="12"
+            cy="12"
+            r="10"
+          />
+          <circle
+            cx="12"
+            cy="12"
+            r="1"
+          />
+        </svg>
+         Active Workspace
+      </span>
+      <h1
+        id="workspace-title"
+      >
+        Demo Production Workspace
+      </h1>
+      <p>
+        A few items need your attention.
+      </p>
+    </div>
+    <div
+      class="production-actions"
+    >
+      <button
+        class="primary-button"
+        type="button"
+      >
+        <svg
+          class="lucide lucide-cloud-upload"
+          fill="none"
+          height="17"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="17"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M12 13v8"
+          />
+          <path
+            d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"
+          />
+          <path
+            d="m8 17 4-4 4 4"
+          />
+        </svg>
+        Sync Latest
+      </button>
+      <button
+        class="production-secondary"
+        type="button"
+      >
+        Browse Assets
+        <svg
+          class="lucide lucide-chevron-right"
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="16"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="m9 18 6-6-6-6"
+          />
+        </svg>
+      </button>
+    </div>
+    <div
+      class="production-location"
+    >
+      <svg
+        class="lucide lucide-folder-open"
+        fill="none"
+        height="14"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="2"
+        viewBox="0 0 24 24"
+        width="14"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <path
+          d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"
+        />
+      </svg>
+      <span>
+        /Projects/OpenAssetDemo
+      </span>
+    </div>
+  </section>
+  <section
+    aria-label="Production pulse"
+    class="production-pulse"
+  >
+    <div
+      class="pulse-summary"
+    >
+      <span>
+        Production Pulse
+      </span>
+      <strong>
+        Attention needed
+      </strong>
+    </div>
+    <div
+      class="pulse-item"
+    >
+      <span
+        class="pulse-dot pulse-amber"
+      />
+      <span>
+        Sync
+      </span>
+      <strong>
+        1 waiting
+      </strong>
+    </div>
+    <div
+      class="pulse-item"
+    >
+      <span
+        class="pulse-dot pulse-blue"
+      />
+      <span>
+        My checkouts
+      </span>
+      <strong>
+        0
+      </strong>
+    </div>
+    <div
+      class="pulse-item"
+    >
+      <span
+        class="pulse-dot pulse-teal"
+      />
+      <span>
+        Local changes
+      </span>
+      <strong>
+        3
+      </strong>
+    </div>
+  </section>
+  <div
+    class="studio-workspace-grid"
+  >
+    <section
+      class="studio-section asset-workbench"
+    >
+      <header
+        class="studio-section-heading"
+      >
+        <div>
+          <span
+            class="section-kicker"
+          >
+            Assets
+          </span>
+          <h2>
+            Continue Working
+          </h2>
+        </div>
+        <button
+          class="text-button"
+          type="button"
+        >
+          <span>
+            Open Asset Browser
+          </span>
+          <svg
+            class="lucide lucide-chevron-right"
+            fill="none"
+            height="15"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="15"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="m9 18 6-6-6-6"
+            />
+          </svg>
+        </button>
+      </header>
+      <div
+        class="asset-grid studio-asset-grid"
+      >
+        <button
+          aria-pressed="false"
+          class="asset-card"
+          type="button"
+        >
+          <span
+            class="asset-preview asset-preview-scene asset-preview-pattern-4"
+            style="--preview-hue: 250; --preview-accent-hue: 5; --preview-rotation: -2deg; --preview-pattern: 4;"
+          >
+            <svg
+              class="lucide lucide-clapperboard"
+              fill="none"
+              height="30"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.6"
+              viewBox="0 0 24 24"
+              width="30"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z"
+              />
+              <path
+                d="m6.2 5.3 3.1 3.9"
+              />
+              <path
+                d="m12.4 3.4 3.1 4"
+              />
+              <path
+                d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"
+              />
+            </svg>
+            <span
+              class="asset-preview-format"
+            >
+              UMAP
+            </span>
+          </span>
+          <span
+            class="asset-card-body"
+          >
+            <span
+              class="asset-card-name"
+            >
+              Main.umap
+            </span>
+            <span
+              class="asset-card-status"
+            >
+              <span
+                class="status-badge status-checked-out"
+              >
+                Checked Out
+              </span>
+              <span
+                class="status-overflow"
+              >
+                +
+                1
+              </span>
+            </span>
+            <span
+              class="asset-card-path"
+              title="Content/Maps/Main.umap"
+            >
+              Content/Maps/Main.umap
+            </span>
+          </span>
+        </button>
+        <button
+          aria-pressed="false"
+          class="asset-card"
+          type="button"
+        >
+          <span
+            class="asset-preview asset-preview-model asset-preview-pattern-2"
+            style="--preview-hue: 71; --preview-accent-hue: 186; --preview-rotation: 11deg; --preview-pattern: 2;"
+          >
+            <svg
+              class="lucide lucide-box"
+              fill="none"
+              height="30"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.6"
+              viewBox="0 0 24 24"
+              width="30"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"
+              />
+              <path
+                d="m3.3 7 8.7 5 8.7-5"
+              />
+              <path
+                d="M12 22V12"
+              />
+            </svg>
+            <span
+              class="asset-preview-format"
+            >
+              UASSET
+            </span>
+          </span>
+          <span
+            class="asset-card-body"
+          >
+            <span
+              class="asset-card-name"
+            >
+              HeroShip.uasset
+            </span>
+            <span
+              class="asset-card-status"
+            >
+              <span
+                class="status-badge status-in-use"
+              >
+                In Use
+              </span>
+              <span
+                class="status-overflow"
+              >
+                +
+                1
+              </span>
+            </span>
+            <span
+              class="asset-card-path"
+              title="Content/Vehicles/HeroShip.uasset"
+            >
+              Content/Vehicles/HeroShip.uasset
+            </span>
+          </span>
+        </button>
+        <button
+          aria-pressed="false"
+          class="asset-card"
+          type="button"
+        >
+          <span
+            class="asset-preview asset-preview-scene asset-preview-pattern-2"
+            style="--preview-hue: 133; --preview-accent-hue: 262; --preview-rotation: 1deg; --preview-pattern: 2;"
+          >
+            <svg
+              class="lucide lucide-clapperboard"
+              fill="none"
+              height="30"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.6"
+              viewBox="0 0 24 24"
+              width="30"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z"
+              />
+              <path
+                d="m6.2 5.3 3.1 3.9"
+              />
+              <path
+                d="m12.4 3.4 3.1 4"
+              />
+              <path
+                d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"
+              />
+            </svg>
+            <span
+              class="asset-preview-format"
+            >
+              UNITY
+            </span>
+          </span>
+          <span
+            class="asset-card-body"
+          >
+            <span
+              class="asset-card-name"
+            >
+              IntroScene.unity
+            </span>
+            <span
+              class="asset-card-status"
+            >
+              <span
+                class="status-badge status-up-to-date"
+              >
+                Up to Date
+              </span>
+            </span>
+            <span
+              class="asset-card-path"
+              title="Assets/Scenes/IntroScene.unity"
+            >
+              Assets/Scenes/IntroScene.unity
+            </span>
+          </span>
+        </button>
+      </div>
+    </section>
+    <aside
+      aria-label="My work queue"
+      class="my-work-panel"
+    >
+      <header
+        class="studio-section-heading"
+      >
+        <div>
+          <span
+            class="section-kicker"
+          >
+            Queue
+          </span>
+          <h2>
+            My Work
+          </h2>
+        </div>
+      </header>
+      <div
+        class="work-queue"
+      >
+        <button
+          class="work-queue-row"
+          type="button"
+        >
+          <span
+            class="queue-icon queue-teal"
+          >
+            <svg
+              class="lucide lucide-send"
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+              width="16"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"
+              />
+              <path
+                d="m21.854 2.147-10.94 10.939"
+              />
+            </svg>
+          </span>
+          <span
+            class="queue-copy"
+          >
+            <strong>
+              Ready to submit
+            </strong>
+            <small>
+              Pending local changes
+            </small>
+          </span>
+          <span
+            class="queue-count"
+          >
+            3
+          </span>
+          <svg
+            class="lucide lucide-chevron-right"
+            fill="none"
+            height="15"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="15"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="m9 18 6-6-6-6"
+            />
+          </svg>
+        </button>
+        <button
+          class="work-queue-row"
+          type="button"
+        >
+          <span
+            class="queue-icon queue-amber"
+          >
+            <svg
+              class="lucide lucide-cloud-upload"
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+              width="16"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M12 13v8"
+              />
+              <path
+                d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"
+              />
+              <path
+                d="m8 17 4-4 4 4"
+              />
+            </svg>
+          </span>
+          <span
+            class="queue-copy"
+          >
+            <strong>
+              Updates available
+            </strong>
+            <small>
+              Newer depot versions are ready
+            </small>
+          </span>
+          <span
+            class="queue-count"
+          >
+            1
+          </span>
+          <svg
+            class="lucide lucide-chevron-right"
+            fill="none"
+            height="15"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="15"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="m9 18 6-6-6-6"
+            />
+          </svg>
+        </button>
+        <button
+          class="work-queue-row"
+          type="button"
+        >
+          <span
+            class="queue-icon queue-coral"
+          >
+            <svg
+              class="lucide lucide-lock"
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+              width="16"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <rect
+                height="11"
+                rx="2"
+                ry="2"
+                width="18"
+                x="3"
+                y="11"
+              />
+              <path
+                d="M7 11V7a5 5 0 0 1 10 0v4"
+              />
+            </svg>
+          </span>
+          <span
+            class="queue-copy"
+          >
+            <strong>
+              Unavailable assets
+            </strong>
+            <small>
+              Currently checked out by collaborators
+            </small>
+          </span>
+          <span
+            class="queue-count"
+          >
+            2
+          </span>
+          <svg
+            class="lucide lucide-chevron-right"
+            fill="none"
+            height="15"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="15"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="m9 18 6-6-6-6"
+            />
+          </svg>
+        </button>
+      </div>
+    </aside>
+  </div>
+  <section
+    class="studio-section depot-activity"
+  >
+    <header
+      class="studio-section-heading"
+    >
+      <div>
+        <span
+          class="section-kicker"
+        >
+          Depot
+        </span>
+        <h2>
+          Latest Activity
+        </h2>
+      </div>
+      <button
+        class="text-button"
+        type="button"
+      >
+        View Locks
+      </button>
+    </header>
+    <div
+      class="activity-list"
+    >
+      <div
+        class="activity-row"
+      >
+        <span
+          class="activity-icon"
+        >
+          <svg
+            class="lucide lucide-activity"
+            fill="none"
+            height="15"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="15"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"
+            />
+          </svg>
+        </span>
+        <span>
+          <strong>
+            Asset checked out
+          </strong>
+          <small>
+            Content/Vehicles/HeroShip.uasset
+          </small>
+        </span>
+        <time>
+          1 hr ago
+        </time>
+      </div>
+      <div
+        class="activity-row"
+      >
+        <span
+          class="activity-icon"
+        >
+          <svg
+            class="lucide lucide-activity"
+            fill="none"
+            height="15"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="15"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"
+            />
+          </svg>
+        </span>
+        <span>
+          <strong>
+            Asset checked out
+          </strong>
+          <small>
+            Assets/Scenes/IntroScene.unity
+          </small>
+        </span>
+        <time>
+          18 min ago
+        </time>
+      </div>
+    </div>
+  </section>
+</main>
+`;
+
+exports[`visual regression baseline > renders the asset browser with a selected file and inspector 1`] = `
+<main
+  class="workspace-layout"
+>
+  <aside
+    class="folder-pane"
+  >
+    <header
+      class="section-heading"
+    >
+      <h2>
+        Project Files
+      </h2>
+    </header>
+    <nav
+      aria-label="Project folders"
+      class="folder-list"
+    >
+      <button
+        type="button"
+      >
+        <svg
+          class="lucide lucide-folder"
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="16"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
+          />
+        </svg>
+        Content
+      </button>
+      <button
+        type="button"
+      >
+        <svg
+          class="lucide lucide-folder"
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="16"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
+          />
+        </svg>
+        Assets
+      </button>
+      <button
+        type="button"
+      >
+        <svg
+          class="lucide lucide-folder"
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="16"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
+          />
+        </svg>
+        Comp
+      </button>
+      <button
+        type="button"
+      >
+        <svg
+          class="lucide lucide-folder"
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="16"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
+          />
+        </svg>
+        Audio
+      </button>
+    </nav>
+  </aside>
+  <section
+    class="file-browser"
+  >
+    <header
+      class="page-heading compact-heading"
+    >
+      <div>
+        <span
+          class="eyebrow"
+        >
+          Workspace
+        </span>
+        <h1>
+          Asset Browser
+        </h1>
+      </div>
+      <div
+        aria-label="Workspace view"
+        class="segmented-control"
+      >
+        <button
+          class="is-active"
+        >
+          <svg
+            class="lucide lucide-grid2x2"
+            fill="none"
+            height="16"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="16"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M12 3v18"
+            />
+            <path
+              d="M3 12h18"
+            />
+            <rect
+              height="18"
+              rx="2"
+              width="18"
+              x="3"
+              y="3"
+            />
+          </svg>
+          Asset
+        </button>
+        <button
+          class=""
+        >
+          <svg
+            class="lucide lucide-list"
+            fill="none"
+            height="16"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="16"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M3 12h.01"
+            />
+            <path
+              d="M3 18h.01"
+            />
+            <path
+              d="M3 6h.01"
+            />
+            <path
+              d="M8 12h13"
+            />
+            <path
+              d="M8 18h13"
+            />
+            <path
+              d="M8 6h13"
+            />
+          </svg>
+          Path
+        </button>
+      </div>
+    </header>
+    <div
+      class="button-row toolbar-row"
+    >
+      <button
+        class="secondary-button"
+        type="button"
+      >
+        <svg
+          class="lucide lucide-cloud-upload"
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="16"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M12 13v8"
+          />
+          <path
+            d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"
+          />
+          <path
+            d="m8 17 4-4 4 4"
+          />
+        </svg>
+        Sync Latest
+      </button>
+      <button
+        class="secondary-button"
+        type="button"
+      >
+        <svg
+          class="lucide lucide-plus"
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="16"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M5 12h14"
+          />
+          <path
+            d="M12 5v14"
+          />
+        </svg>
+        Add Files
+      </button>
+      <button
+        class="ghost-button"
+        type="button"
+      >
+        <svg
+          class="lucide lucide-rotate-ccw"
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="16"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
+          />
+          <path
+            d="M3 3v5h5"
+          />
+        </svg>
+        Revert Intent
+      </button>
+      <button
+        class="secondary-button inspector-trigger"
+        type="button"
+      >
+        <svg
+          class="lucide lucide-panel-right"
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="16"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <rect
+            height="18"
+            rx="2"
+            width="18"
+            x="3"
+            y="3"
+          />
+          <path
+            d="M15 3v18"
+          />
+        </svg>
+        Inspector
+      </button>
+    </div>
+    <div
+      class="asset-grid browser-grid"
+    >
+      <button
+        aria-pressed="true"
+        class="asset-card is-selected"
+        type="button"
+      >
+        <span
+          class="asset-preview asset-preview-scene asset-preview-pattern-4"
+          style="--preview-hue: 250; --preview-accent-hue: 5; --preview-rotation: -2deg; --preview-pattern: 4;"
+        >
+          <svg
+            class="lucide lucide-clapperboard"
+            fill="none"
+            height="30"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="1.6"
+            viewBox="0 0 24 24"
+            width="30"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z"
+            />
+            <path
+              d="m6.2 5.3 3.1 3.9"
+            />
+            <path
+              d="m12.4 3.4 3.1 4"
+            />
+            <path
+              d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"
+            />
+          </svg>
+          <span
+            class="asset-preview-format"
+          >
+            UMAP
+          </span>
+        </span>
+        <span
+          class="asset-card-body"
+        >
+          <span
+            class="asset-card-name"
+          >
+            Main.umap
+          </span>
+          <span
+            class="asset-card-status"
+          >
+            <span
+              class="status-badge status-checked-out"
+            >
+              Checked Out
+            </span>
+            <span
+              class="status-overflow"
+            >
+              +
+              1
+            </span>
+          </span>
+          <span
+            class="asset-card-path"
+            title="Content/Maps/Main.umap"
+          >
+            Content/Maps/Main.umap
+          </span>
+        </span>
+      </button>
+      <button
+        aria-pressed="false"
+        class="asset-card"
+        type="button"
+      >
+        <span
+          class="asset-preview asset-preview-model asset-preview-pattern-2"
+          style="--preview-hue: 71; --preview-accent-hue: 186; --preview-rotation: 11deg; --preview-pattern: 2;"
+        >
+          <svg
+            class="lucide lucide-box"
+            fill="none"
+            height="30"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="1.6"
+            viewBox="0 0 24 24"
+            width="30"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"
+            />
+            <path
+              d="m3.3 7 8.7 5 8.7-5"
+            />
+            <path
+              d="M12 22V12"
+            />
+          </svg>
+          <span
+            class="asset-preview-format"
+          >
+            UASSET
+          </span>
+        </span>
+        <span
+          class="asset-card-body"
+        >
+          <span
+            class="asset-card-name"
+          >
+            HeroShip.uasset
+          </span>
+          <span
+            class="asset-card-status"
+          >
+            <span
+              class="status-badge status-in-use"
+            >
+              In Use
+            </span>
+            <span
+              class="status-overflow"
+            >
+              +
+              1
+            </span>
+          </span>
+          <span
+            class="asset-card-path"
+            title="Content/Vehicles/HeroShip.uasset"
+          >
+            Content/Vehicles/HeroShip.uasset
+          </span>
+        </span>
+      </button>
+      <button
+        aria-pressed="false"
+        class="asset-card"
+        type="button"
+      >
+        <span
+          class="asset-preview asset-preview-scene asset-preview-pattern-2"
+          style="--preview-hue: 133; --preview-accent-hue: 262; --preview-rotation: 1deg; --preview-pattern: 2;"
+        >
+          <svg
+            class="lucide lucide-clapperboard"
+            fill="none"
+            height="30"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="1.6"
+            viewBox="0 0 24 24"
+            width="30"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z"
+            />
+            <path
+              d="m6.2 5.3 3.1 3.9"
+            />
+            <path
+              d="m12.4 3.4 3.1 4"
+            />
+            <path
+              d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"
+            />
+          </svg>
+          <span
+            class="asset-preview-format"
+          >
+            UNITY
+          </span>
+        </span>
+        <span
+          class="asset-card-body"
+        >
+          <span
+            class="asset-card-name"
+          >
+            IntroScene.unity
+          </span>
+          <span
+            class="asset-card-status"
+          >
+            <span
+              class="status-badge status-up-to-date"
+            >
+              Up to Date
+            </span>
+          </span>
+          <span
+            class="asset-card-path"
+            title="Assets/Scenes/IntroScene.unity"
+          >
+            Assets/Scenes/IntroScene.unity
+          </span>
+        </span>
+      </button>
+      <button
+        aria-pressed="false"
+        class="asset-card"
+        type="button"
+      >
+        <span
+          class="asset-preview asset-preview-document asset-preview-pattern-2"
+          style="--preview-hue: 334; --preview-accent-hue: 21; --preview-rotation: 10deg; --preview-pattern: 2;"
+        >
+          <svg
+            class="lucide lucide-file-text"
+            fill="none"
+            height="30"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="1.6"
+            viewBox="0 0 24 24"
+            width="30"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"
+            />
+            <path
+              d="M14 2v4a2 2 0 0 0 2 2h4"
+            />
+            <path
+              d="M10 9H8"
+            />
+            <path
+              d="M16 13H8"
+            />
+            <path
+              d="M16 17H8"
+            />
+          </svg>
+          <span
+            class="asset-preview-format"
+          >
+            NK
+          </span>
+        </span>
+        <span
+          class="asset-card-body"
+        >
+          <span
+            class="asset-card-name"
+          >
+            Shot010.nk
+          </span>
+          <span
+            class="asset-card-status"
+          >
+            <span
+              class="status-badge status-ready-to-submit"
+            >
+              Ready to Submit
+            </span>
+          </span>
+          <span
+            class="asset-card-path"
+            title="Comp/Shot010.nk"
+          >
+            Comp/Shot010.nk
+          </span>
+        </span>
+      </button>
+      <button
+        aria-pressed="false"
+        class="asset-card"
+        type="button"
+      >
+        <span
+          class="asset-preview asset-preview-audio asset-preview-pattern-1"
+          style="--preview-hue: 59; --preview-accent-hue: 133; --preview-rotation: -1deg; --preview-pattern: 1;"
+        >
+          <svg
+            class="lucide lucide-music2"
+            fill="none"
+            height="30"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="1.6"
+            viewBox="0 0 24 24"
+            width="30"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <circle
+              cx="8"
+              cy="18"
+              r="4"
+            />
+            <path
+              d="M12 18V2l7 4"
+            />
+          </svg>
+          <span
+            class="asset-preview-format"
+          >
+            WAV
+          </span>
+        </span>
+        <span
+          class="asset-card-body"
+        >
+          <span
+            class="asset-card-name"
+          >
+            Ambience.wav
+          </span>
+          <span
+            class="asset-card-status"
+          >
+            <span
+              class="status-badge status-new-file"
+            >
+              New File
+            </span>
+          </span>
+          <span
+            class="asset-card-path"
+            title="Audio/Ambience.wav"
+          >
+            Audio/Ambience.wav
+          </span>
+        </span>
+      </button>
+    </div>
+  </section>
+  <aside
+    aria-label="File inspector"
+    class="inspector-panel "
+  >
+    <button
+      aria-label="Close inspector"
+      class="inspector-close"
+      type="button"
+    >
+      <svg
+        class="lucide lucide-x"
+        fill="none"
+        height="18"
+        stroke="currentColor"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="2"
+        viewBox="0 0 24 24"
+        width="18"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <path
+          d="M18 6 6 18"
+        />
+        <path
+          d="m6 6 12 12"
+        />
+      </svg>
+    </button>
+    <span
+      class="inspector-preview asset-preview asset-preview-scene asset-preview-pattern-4"
+      style="--preview-hue: 250; --preview-accent-hue: 5; --preview-rotation: -2deg; --preview-pattern: 4;"
+    >
+      <span>
+        UMAP
+      </span>
+    </span>
+    <header
+      class="inspector-header"
+    >
+      <h2
+        title="Main.umap"
+      >
+        Main.umap
+      </h2>
+      <p
+        title="Content/Maps/Main.umap"
+      >
+        Content/Maps/Main.umap
+      </p>
+    </header>
+    <div
+      class="status-cluster"
+    >
+      <span
+        class="status-badge status-checked-out"
+      >
+        Checked Out
+      </span>
+      <span
+        class="status-badge status-ready-to-submit"
+      >
+        Ready to Submit
+      </span>
+    </div>
+    <div
+      class="inspector-detail-grid artist-details"
+    >
+      <span>
+        <svg
+          class="lucide lucide-lock"
+          fill="none"
+          height="15"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="15"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <rect
+            height="11"
+            rx="2"
+            ry="2"
+            width="18"
+            x="3"
+            y="11"
+          />
+          <path
+            d="M7 11V7a5 5 0 0 1 10 0v4"
+          />
+        </svg>
+        Checked out by you
+      </span>
+      <span>
+        <svg
+          class="lucide lucide-git-branch"
+          fill="none"
+          height="15"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="15"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <line
+            x1="6"
+            x2="6"
+            y1="3"
+            y2="15"
+          />
+          <circle
+            cx="18"
+            cy="6"
+            r="3"
+          />
+          <circle
+            cx="6"
+            cy="18"
+            r="3"
+          />
+          <path
+            d="M18 9a9 9 0 0 1-9 9"
+          />
+        </svg>
+        Version 42
+      </span>
+    </div>
+    <section
+      class="inspector-section"
+    >
+      <h3>
+        Dependencies
+      </h3>
+      <div
+        class="compact-list"
+      >
+        <span
+          class="compact-row"
+        >
+          <span>
+            <svg
+              class="lucide lucide-link2"
+              fill="none"
+              height="14"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+              width="14"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M9 17H7A5 5 0 0 1 7 7h2"
+              />
+              <path
+                d="M15 7h2a5 5 0 1 1 0 10h-2"
+              />
+              <line
+                x1="8"
+                x2="16"
+                y1="12"
+                y2="12"
+              />
+            </svg>
+            LightingRig.uasset
+          </span>
+        </span>
+        <span
+          class="compact-row"
+        >
+          <span>
+            <svg
+              class="lucide lucide-link2"
+              fill="none"
+              height="14"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+              width="14"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M9 17H7A5 5 0 0 1 7 7h2"
+              />
+              <path
+                d="M15 7h2a5 5 0 1 1 0 10h-2"
+              />
+              <line
+                x1="8"
+                x2="16"
+                y1="12"
+                y2="12"
+              />
+            </svg>
+            HeroShip.uasset
+          </span>
+        </span>
+        <span
+          class="compact-row"
+        >
+          <span>
+            <svg
+              class="lucide lucide-link2"
+              fill="none"
+              height="14"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+              width="14"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M9 17H7A5 5 0 0 1 7 7h2"
+              />
+              <path
+                d="M15 7h2a5 5 0 1 1 0 10h-2"
+              />
+              <line
+                x1="8"
+                x2="16"
+                y1="12"
+                y2="12"
+              />
+            </svg>
+            Main.umap.meta
+          </span>
+        </span>
+      </div>
+    </section>
+    <section
+      class="inspector-section"
+    >
+      <h3>
+        Changelist
+      </h3>
+      <p
+        class="subtle-copy"
+      >
+        Lighting polish
+      </p>
+    </section>
+    <details
+      class="advanced-details"
+    >
+      <summary>
+        <span>
+          Advanced
+        </span>
+        <svg
+          class="lucide lucide-chevron-down"
+          fill="none"
+          height="15"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="15"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="m6 9 6 6 6-6"
+          />
+        </svg>
+      </summary>
+      <div
+        class="inspector-detail-grid"
+      >
+        <span>
+          <svg
+            class="lucide lucide-file-box"
+            fill="none"
+            height="15"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="15"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M14.5 22H18a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"
+            />
+            <path
+              d="M14 2v4a2 2 0 0 0 2 2h4"
+            />
+            <path
+              d="M3 13.1a2 2 0 0 0-1 1.76v3.24a2 2 0 0 0 .97 1.78L6 21.7a2 2 0 0 0 2.03.01L11 19.9a2 2 0 0 0 1-1.76V14.9a2 2 0 0 0-.97-1.78L8 11.3a2 2 0 0 0-2.03-.01Z"
+            />
+            <path
+              d="M7 17v5"
+            />
+            <path
+              d="M11.7 14.2 7 17l-4.7-2.8"
+            />
+          </svg>
+          Unreal map · 248 MB
+        </span>
+        <span
+          title="Content/Maps/Main.umap"
+        >
+          <svg
+            class="lucide lucide-git-branch"
+            fill="none"
+            height="15"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="15"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <line
+              x1="6"
+              x2="6"
+              y1="3"
+              y2="15"
+            />
+            <circle
+              cx="18"
+              cy="6"
+              r="3"
+            />
+            <circle
+              cx="6"
+              cy="18"
+              r="3"
+            />
+            <path
+              d="M18 9a9 9 0 0 1-9 9"
+            />
+          </svg>
+          Content/Maps/Main.umap
+        </span>
+        <span>
+          <svg
+            class="lucide lucide-clock3"
+            fill="none"
+            height="15"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+            width="15"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <circle
+              cx="12"
+              cy="12"
+              r="10"
+            />
+            <polyline
+              points="12 6 12 12 16.5 12"
+            />
+          </svg>
+          Depot revision 42
+        </span>
+      </div>
+    </details>
+    <div
+      class="inspector-actions"
+    >
+      <button
+        class="secondary-button review-launch-button"
+        type="button"
+      >
+        <svg
+          class="lucide lucide-message-square"
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="16"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
+          />
+        </svg>
+        Review & Annotate
+      </button>
+      <button
+        class="primary-button"
+        disabled=""
+        type="button"
+      >
+        <svg
+          class="lucide lucide-lock"
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="16"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <rect
+            height="11"
+            rx="2"
+            ry="2"
+            width="18"
+            x="3"
+            y="11"
+          />
+          <path
+            d="M7 11V7a5 5 0 0 1 10 0v4"
+          />
+        </svg>
+        Lock / Check Out
+      </button>
+      <button
+        class="secondary-button"
+        type="button"
+      >
+        <svg
+          class="lucide lucide-lock-open"
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="16"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <rect
+            height="11"
+            rx="2"
+            ry="2"
+            width="18"
+            x="3"
+            y="11"
+          />
+          <path
+            d="M7 11V7a5 5 0 0 1 9.9-1"
+          />
+        </svg>
+        Unlock
+      </button>
+      <button
+        class="secondary-button"
+        type="button"
+      >
+        <svg
+          class="lucide lucide-send"
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="16"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"
+          />
+          <path
+            d="m21.854 2.147-10.94 10.939"
+          />
+        </svg>
+        Submit Changes
+      </button>
+      <button
+        class="ghost-button"
+        type="button"
+      >
+        <svg
+          class="lucide lucide-rotate-ccw"
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="16"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
+          />
+          <path
+            d="M3 3v5h5"
+          />
+        </svg>
+        Revert Intent
+      </button>
+      <button
+        class="ghost-button danger-text-button"
+        type="button"
+      >
+        <svg
+          class="lucide lucide-trash2"
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="16"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M3 6h18"
+          />
+          <path
+            d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"
+          />
+          <path
+            d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"
+          />
+          <line
+            x1="10"
+            x2="10"
+            y1="11"
+            y2="17"
+          />
+          <line
+            x1="14"
+            x2="14"
+            y1="11"
+            y2="17"
+          />
+        </svg>
+        Mark for Delete
+      </button>
+      <button
+        class="ghost-button"
+        type="button"
+      >
+        <svg
+          class="lucide lucide-history"
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          viewBox="0 0 24 24"
+          width="16"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
+          />
+          <path
+            d="M3 3v5h5"
+          />
+          <path
+            d="M12 7v5l4 2"
+          />
+        </svg>
+        History
+      </button>
+    </div>
+  </aside>
+</main>
+`;
+
+exports[`visual regression baseline > renders the submit sheet with warnings surfaced inline 1`] = `
+<body>
+  <div>
+    <div
+      class="dialog-backdrop"
+      role="presentation"
+    >
+      <section
+        aria-labelledby="dialog-title"
+        aria-modal="true"
+        class="dialog"
+        role="dialog"
+      >
+        <header
+          class="dialog-header"
+        >
+          <h2
+            id="dialog-title"
+          >
+            Submit Changes
+          </h2>
+          <button
+            aria-label="Close dialog"
+            class="icon-button"
+            type="button"
+          >
+            <svg
+              class="lucide lucide-x"
+              fill="none"
+              height="18"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              viewBox="0 0 24 24"
+              width="18"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M18 6 6 18"
+              />
+              <path
+                d="m6 6 12 12"
+              />
+            </svg>
+          </button>
+        </header>
+        <div
+          class="dialog-body"
+        >
+          <div
+            class="submit-dialog"
+          >
+            <div
+              class="submit-intro"
+            >
+              <span
+                class="submit-intro-icon"
+              >
+                <svg
+                  class="lucide lucide-file-check2"
+                  fill="none"
+                  height="20"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                  width="20"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"
+                  />
+                  <path
+                    d="M14 2v4a2 2 0 0 0 2 2h4"
+                  />
+                  <path
+                    d="m3 15 2 2 4-4"
+                  />
+                </svg>
+              </span>
+              <span>
+                <strong>
+                  Review once, then send
+                </strong>
+                <small>
+                  Validation runs automatically. Your files stay untouched if the server rejects the submit.
+                </small>
+              </span>
+            </div>
+            <section
+              class="submit-summary"
+            >
+              <h3>
+                Lighting polish
+              </h3>
+              <div
+                class="compact-list"
+              >
+                <span
+                  class="compact-row"
+                >
+                  <span>
+                    Main.umap
+                  </span>
+                  <span>
+                    248 MB
+                  </span>
+                </span>
+                <span
+                  class="compact-row"
+                >
+                  <span>
+                    Ambience.wav
+                  </span>
+                  <span>
+                    63 MB
+                  </span>
+                </span>
+              </div>
+            </section>
+            <div
+              class="submit-checklist"
+            >
+              <span
+                class="checklist-row "
+              >
+                <svg
+                  class="lucide lucide-circle-check"
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                  width="16"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="10"
+                  />
+                  <path
+                    d="m9 12 2 2 4-4"
+                  />
+                </svg>
+                Required files locked
+              </span>
+              <span
+                class="checklist-row is-warning"
+              >
+                <svg
+                  class="lucide lucide-triangle-alert"
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                  width="16"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"
+                  />
+                  <path
+                    d="M12 9v4"
+                  />
+                  <path
+                    d="M12 17h.01"
+                  />
+                </svg>
+                No missing dependencies
+              </span>
+              <span
+                class="checklist-row "
+              >
+                <svg
+                  class="lucide lucide-circle"
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                  width="16"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="10"
+                  />
+                </svg>
+                Unity .meta files included
+              </span>
+              <span
+                class="checklist-row "
+              >
+                <svg
+                  class="lucide lucide-circle"
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                  width="16"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="10"
+                  />
+                </svg>
+                Large files acknowledged
+              </span>
+              <span
+                class="checklist-row "
+              >
+                <svg
+                  class="lucide lucide-circle"
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                  width="16"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="10"
+                  />
+                </svg>
+                Generated cache excluded
+              </span>
+              <span
+                class="checklist-row "
+              >
+                <svg
+                  class="lucide lucide-circle"
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                  width="16"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r="10"
+                  />
+                </svg>
+                Path validation clear
+              </span>
+              <span
+                class="checklist-warning"
+              >
+                <svg
+                  class="lucide lucide-triangle-alert"
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                  width="16"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"
+                  />
+                  <path
+                    d="M12 9v4"
+                  />
+                  <path
+                    d="M12 17h.01"
+                  />
+                </svg>
+                Include the matching metadata file before submit.
+              </span>
+              <span
+                class="checklist-warning"
+              >
+                <svg
+                  class="lucide lucide-triangle-alert"
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  viewBox="0 0 24 24"
+                  width="16"
+                  xmlns="http://www.w3.org/2000/svg"
+                >
+                  <path
+                    d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"
+                  />
+                  <path
+                    d="M12 9v4"
+                  />
+                  <path
+                    d="M12 17h.01"
+                  />
+                </svg>
+                Remove generated cache files from the changelist.
+              </span>
+            </div>
+            <label
+              class="submit-description"
+            >
+              What changed?
+              <textarea
+                placeholder="Example: Updated hero textures and fixed the walk-cycle timing"
+                required=""
+                rows="4"
+              >
+                Map lighting update for the Friday review.
+              </textarea>
+            </label>
+          </div>
+        </div>
+        <footer
+          class="dialog-footer"
+        >
+          <button
+            class="secondary-button"
+            type="button"
+          >
+            Cancel
+          </button>
+          <button
+            class="primary-button"
+            type="button"
+          >
+            Submit 2 files
+          </button>
+        </footer>
+      </section>
+    </div>
+  </div>
+</body>
+`;

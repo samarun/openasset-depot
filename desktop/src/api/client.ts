@@ -2,10 +2,15 @@ import type {
   AdapterDefinition,
   AdapterFileInput,
   AdapterValidationResponse,
+  Collaborator,
+  ChangelistResponse,
+  CreateReviewRequestInput,
   CreateWorkspaceInput,
   DeleteWorkspaceResponse,
   Depot,
+  DependencyImpact,
   DependencyScanResult,
+  DiscardShelfResponse,
   ExtractedMetadata,
   FileHistoryEntry,
   FileOperationResponse,
@@ -14,12 +19,23 @@ import type {
   LockPageResponse,
   PreviewGeneration,
   ProjectDetection,
+  CreateReviewCommentInput,
+  ReviewComment,
+  ReviewRequest,
+  Shelf,
+  ShelfSummary,
   Stream,
+  SignupStatus,
+  SsoStart,
+  SsoStatus,
+  SubmitResponse,
   SyncPlanEntry,
   UserSession,
+  UserAccount,
   ValidationResponse,
   Workspace,
 } from "../types/domain";
+import { createUuid } from "../utils/uuid";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -45,6 +61,19 @@ interface HealthResponse {
   status: string;
 }
 
+export interface BrowserUpload {
+  path: string;
+  file: File;
+  action: "add" | "edit";
+}
+
+export interface ReviewProxyDownload {
+  blob: Blob;
+  frameRateNumerator?: number;
+  frameRateDenominator?: number;
+  startFrame?: number;
+}
+
 export class OpenAssetApiClient {
   private readonly baseUrl: string;
   private readonly fetcher: typeof fetch;
@@ -67,6 +96,49 @@ export class OpenAssetApiClient {
     };
   }
 
+  signupStatus(): Promise<SignupStatus> {
+    return this.request<SignupStatus>("/api/auth/signup");
+  }
+
+  /** Reports whether this server has an identity provider configured. */
+  ssoStatus(): Promise<SsoStatus> {
+    return this.request<SsoStatus>("/api/auth/sso");
+  }
+
+  /** Begins an SSO login and returns the URL to open in a browser. */
+  startSso(): Promise<SsoStart> {
+    return this.request<SsoStart>("/api/auth/sso", { method: "POST" });
+  }
+
+  /** Exchanges the authorization code from the redirect for a session. */
+  async completeSso(code: string, state: string): Promise<UserSession> {
+    const response = await this.request<LoginResponse>("/api/auth/sso/callback", {
+      method: "POST",
+      body: JSON.stringify({ code, state }),
+    });
+    return {
+      token: response.token,
+      username: response.user.username,
+      serverUrl: this.baseUrl,
+      isAdmin: response.user.is_admin,
+    };
+  }
+
+  signup(username: string, password: string, displayName?: string): Promise<UserAccount> {
+    return this.request<UserAccount>("/api/auth/signup", {
+      method: "POST",
+      body: JSON.stringify({ username, password, display_name: displayName }),
+    });
+  }
+
+  changePassword(token: string, currentPassword: string, newPassword: string): Promise<{ changed: boolean }> {
+    return this.request<{ changed: boolean }>("/api/auth/change-password", {
+      method: "POST",
+      token,
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    });
+  }
+
   ready(): Promise<HealthResponse> {
     return this.request<HealthResponse>("/ready");
   }
@@ -79,7 +151,7 @@ export class OpenAssetApiClient {
     return this.request<Depot>("/api/depots", {
       method: "POST",
       token,
-      headers: { "idempotency-key": crypto.randomUUID() },
+      headers: { "idempotency-key": createUuid() },
       body: JSON.stringify({ name, description }),
     });
   }
@@ -88,7 +160,7 @@ export class OpenAssetApiClient {
     return this.request<Stream>("/api/streams", {
       method: "POST",
       token,
-      headers: { "idempotency-key": crypto.randomUUID() },
+      headers: { "idempotency-key": createUuid() },
       body: JSON.stringify({ name, depot }),
     });
   }
@@ -101,9 +173,170 @@ export class OpenAssetApiClient {
     return this.request<Workspace>("/api/workspaces", {
       method: "POST",
       token,
-      headers: { "idempotency-key": crypto.randomUUID() },
+      headers: { "idempotency-key": createUuid() },
       body: JSON.stringify(input),
     });
+  }
+
+  createChangelist(token: string, workspaceId: string, description: string): Promise<ChangelistResponse> {
+    return this.request<ChangelistResponse>("/api/changelists", {
+      method: "POST",
+      token,
+      headers: { "idempotency-key": createUuid() },
+      body: JSON.stringify({ workspace_id: workspaceId, description }),
+    });
+  }
+
+  submitChangelist(
+    token: string,
+    workspaceId: string,
+    changelistId: string,
+    uploads: BrowserUpload[],
+  ): Promise<SubmitResponse> {
+    const form = new FormData();
+    form.set("workspace_id", workspaceId);
+    for (const upload of uploads) {
+      form.append("file", upload.file, upload.path);
+    }
+    return this.request<SubmitResponse>(`/api/changelists/${changelistId}/submit`, {
+      method: "POST",
+      token,
+      body: form,
+    });
+  }
+
+  /**
+   * Parks a changelist's file content on the server without submitting it.
+   *
+   * Uses the same multipart shape as submit, so a caller that can build a submit
+   * can shelve. Unlike submit this creates no revision and needs no lock.
+   */
+  shelveChangelist(
+    token: string,
+    changelistId: string,
+    uploads: BrowserUpload[],
+  ): Promise<Shelf> {
+    const form = new FormData();
+    for (const upload of uploads) {
+      form.append("file", upload.file, upload.path);
+    }
+    return this.request<Shelf>(`/api/changelists/${changelistId}/shelve`, {
+      method: "POST",
+      token,
+      body: form,
+    });
+  }
+
+  getShelf(token: string, changelistId: string): Promise<Shelf> {
+    return this.request<Shelf>(`/api/changelists/${changelistId}/shelve`, { token });
+  }
+
+  listShelves(token: string, workspaceId: string): Promise<ShelfSummary[]> {
+    const query = new URLSearchParams({ workspace_id: workspaceId });
+    return this.request<ShelfSummary[]>(`/api/shelves?${query}`, { token });
+  }
+
+  unshelveChangelist(token: string, changelistId: string): Promise<Shelf> {
+    return this.request<Shelf>(`/api/changelists/${changelistId}/unshelve`, {
+      method: "POST",
+      token,
+      headers: { "idempotency-key": createUuid() },
+      body: JSON.stringify({}),
+    });
+  }
+
+  discardShelf(token: string, changelistId: string): Promise<DiscardShelfResponse> {
+    return this.request<DiscardShelfResponse>(`/api/changelists/${changelistId}/shelve`, {
+      method: "DELETE",
+      token,
+      headers: { "idempotency-key": createUuid() },
+    });
+  }
+
+  /** Downloads one shelved file's bytes, or `undefined` if the shelf lost it. */
+  async downloadShelfContent(
+    token: string,
+    changelistId: string,
+    path: string,
+  ): Promise<Blob | undefined> {
+    const query = new URLSearchParams({ changelist_id: changelistId, path });
+    const response = await this.fetcher(`${this.baseUrl}/api/shelves/content?${query}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (response.status === 404) return undefined;
+    if (!response.ok) throw new ApiError(`Request failed with ${response.status}`, response.status);
+    return await response.blob();
+  }
+
+  /**
+   * Reports what depends on a file and what it depends on.
+   *
+   * The reverse direction is the one that changes an artist's decision, so this
+   * is fetched when the inspector opens rather than behind a disclosure.
+   */
+  dependencyImpact(token: string, workspaceId: string, path: string): Promise<DependencyImpact> {
+    const query = new URLSearchParams({ workspace_id: workspaceId, path });
+    return this.request<DependencyImpact>(`/api/dependencies/impact?${query}`, { token });
+  }
+
+  listReviewRequests(
+    token: string,
+    workspaceId: string,
+    options: { state?: ReviewRequest["state"]; awaitingMe?: boolean } = {},
+  ): Promise<ReviewRequest[]> {
+    const query = new URLSearchParams({ workspace_id: workspaceId });
+    if (options.state) query.set("state", options.state);
+    if (options.awaitingMe) query.set("awaiting_me", "true");
+    return this.request<ReviewRequest[]>(`/api/reviews/requests?${query}`, { token });
+  }
+
+  createReviewRequest(token: string, input: CreateReviewRequestInput): Promise<ReviewRequest> {
+    return this.request<ReviewRequest>("/api/reviews/requests", {
+      method: "POST",
+      token,
+      headers: { "idempotency-key": createUuid() },
+      body: JSON.stringify({
+        workspace_id: input.workspaceId,
+        path: input.path,
+        revision_number: input.revisionNumber,
+        title: input.title,
+        description: input.description ?? "",
+        reviewers: input.reviewers,
+      }),
+    });
+  }
+
+  decideReviewRequest(
+    token: string,
+    workspaceId: string,
+    requestId: string,
+    decision: "approved" | "changes_requested",
+    note?: string,
+  ): Promise<ReviewRequest> {
+    return this.request<ReviewRequest>(`/api/reviews/requests/${requestId}/decision`, {
+      method: "POST",
+      token,
+      headers: { "idempotency-key": createUuid() },
+      body: JSON.stringify({ workspace_id: workspaceId, decision, note }),
+    });
+  }
+
+  closeReviewRequest(
+    token: string,
+    workspaceId: string,
+    requestId: string,
+  ): Promise<ReviewRequest> {
+    return this.request<ReviewRequest>(`/api/reviews/requests/${requestId}/close`, {
+      method: "POST",
+      token,
+      headers: { "idempotency-key": createUuid() },
+      body: JSON.stringify({ workspace_id: workspaceId }),
+    });
+  }
+
+  /** People who can open this workspace's depot, for assigning reviewers. */
+  listCollaborators(token: string, workspaceId: string): Promise<Collaborator[]> {
+    return this.request<Collaborator[]>(`/api/workspaces/${workspaceId}/collaborators`, { token });
   }
 
   deleteWorkspace(token: string, workspaceId: string): Promise<DeleteWorkspaceResponse> {
@@ -170,6 +403,114 @@ export class OpenAssetApiClient {
         limit,
         include_current: true,
       }),
+    });
+  }
+
+  async downloadPreview(
+    token: string,
+    workspaceId: string,
+    path: string,
+    revisionNumber: number,
+  ): Promise<Blob | undefined> {
+    const query = new URLSearchParams({
+      workspace_id: workspaceId,
+      path,
+      revision_number: String(revisionNumber),
+    });
+    const response = await this.fetcher(`${this.baseUrl}/api/files/preview?${query}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (response.status === 404) return undefined;
+    if (!response.ok) {
+      throw new ApiError(`Preview request failed with ${response.status}`, response.status);
+    }
+    return response.blob();
+  }
+
+  async downloadReviewMedia(
+    token: string,
+    workspaceId: string,
+    path: string,
+    revisionNumber: number,
+  ): Promise<Blob | undefined> {
+    const query = new URLSearchParams({
+      workspace_id: workspaceId,
+      path,
+      revision_number: String(revisionNumber),
+    });
+    const response = await this.fetcher(`${this.baseUrl}/api/reviews/media?${query}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (response.status === 404) return undefined;
+    if (!response.ok) {
+      throw new ApiError(`Review media request failed with ${response.status}`, response.status);
+    }
+    return response.blob();
+  }
+
+  async downloadReviewProxy(
+    token: string,
+    workspaceId: string,
+    path: string,
+    revisionNumber: number,
+  ): Promise<ReviewProxyDownload | undefined> {
+    const query = new URLSearchParams({
+      workspace_id: workspaceId,
+      path,
+      revision_number: String(revisionNumber),
+    });
+    const response = await this.fetcher(`${this.baseUrl}/api/reviews/proxy?${query}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (response.status === 404) return undefined;
+    if (!response.ok) {
+      throw new ApiError(`Review proxy request failed with ${response.status}`, response.status);
+    }
+    const blob = await response.blob();
+    const frameRateNumerator = optionalIntegerHeader(response, "x-review-frame-rate-numerator");
+    const frameRateDenominator = optionalIntegerHeader(response, "x-review-frame-rate-denominator");
+    const startFrame = optionalIntegerHeader(response, "x-review-start-frame");
+    if (
+      [frameRateNumerator, frameRateDenominator, startFrame].some((value) => value !== undefined)
+      && [frameRateNumerator, frameRateDenominator, startFrame].some((value) => value === undefined)
+    ) {
+      throw new ApiError("Review proxy returned an incomplete timebase", 502);
+    }
+    return { blob, frameRateNumerator, frameRateDenominator, startFrame };
+  }
+
+  listReviewComments(
+    token: string,
+    workspaceId: string,
+    path: string,
+    revisionNumber: number,
+  ): Promise<ReviewComment[]> {
+    const query = new URLSearchParams({
+      workspace_id: workspaceId,
+      path,
+      revision_number: String(revisionNumber),
+    });
+    return this.request<ReviewComment[]>(`/api/reviews/comments?${query}`, { token });
+  }
+
+  createReviewComment(token: string, input: CreateReviewCommentInput): Promise<ReviewComment> {
+    return this.request<ReviewComment>("/api/reviews/comments", {
+      method: "POST",
+      token,
+      body: JSON.stringify(input),
+    });
+  }
+
+  resolveReviewComment(
+    token: string,
+    workspaceId: string,
+    commentId: string,
+    resolved = true,
+  ): Promise<ReviewComment> {
+    return this.request<ReviewComment>(`/api/reviews/comments/${commentId}/resolve`, {
+      method: "POST",
+      token,
+      body: JSON.stringify({ workspace_id: workspaceId, resolved }),
     });
   }
 
@@ -339,7 +680,9 @@ export class OpenAssetApiClient {
     options: RequestInit & { token?: string } = {},
   ): Promise<T> {
     const headers = new Headers(options.headers);
-    headers.set("content-type", "application/json");
+    if (!(options.body instanceof FormData)) {
+      headers.set("content-type", "application/json");
+    }
     if (options.token) {
       headers.set("authorization", `Bearer ${options.token}`);
     }
@@ -367,8 +710,21 @@ export class OpenAssetApiClient {
   }
 }
 
+function optionalIntegerHeader(response: Response, name: string): number | undefined {
+  const raw = response.headers.get(name);
+  if (raw == null) return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value)) {
+    throw new ApiError(`Review proxy returned an invalid ${name} header`, 502);
+  }
+  return value;
+}
+
 export function friendlyApiError(error: unknown): string {
   if (error instanceof ApiError) {
+    if (error.status === 401 && error.message.toLowerCase().includes("current password")) {
+      return error.message;
+    }
     if (error.status === 401) return "Sign in again to continue.";
     if (error.status === 409) return humanConflictMessage(error.message);
     return error.message;

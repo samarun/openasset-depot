@@ -18,6 +18,46 @@ describe("OpenAssetApiClient", () => {
     );
   });
 
+  it("supports signup and authenticated password changes", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/auth/signup")) {
+        return jsonResponse({ id: "user-1", username: "artist", is_admin: false });
+      }
+      return jsonResponse({ changed: true });
+    });
+    const client = new OpenAssetApiClient("http://server", fetcher as unknown as typeof fetch);
+
+    await expect(client.signup("artist", "long-password", "Artist One")).resolves.toMatchObject({
+      username: "artist",
+    });
+    await expect(client.changePassword("token", "long-password", "new-long-password")).resolves.toEqual({
+      changed: true,
+    });
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      "http://server/api/auth/change-password",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("submits browser files as multipart data without a JSON content type", async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      jsonResponse({ changelist_id: "change-1", revisions: [] }),
+    );
+    const client = new OpenAssetApiClient("http://server", fetcher as unknown as typeof fetch);
+    const upload = new File(["asset data"], "Hero.txt", { type: "text/plain" });
+
+    await client.submitChangelist("token", "workspace-1", "change-1", [
+      { path: "Assets/Hero.txt", file: upload, action: "add" },
+    ]);
+
+    const request = fetcher.mock.calls[0][1] as RequestInit;
+    expect(request.body).toBeInstanceOf(FormData);
+    expect((request.headers as Headers).has("content-type")).toBe(false);
+    expect((request.headers as Headers).get("authorization")).toBe("Bearer token");
+  });
+
   it("maps API errors to friendly messages", async () => {
     const fetcher = vi.fn(async () =>
       jsonResponse({ code: "conflict", message: "file is already locked" }, 409),
@@ -108,6 +148,88 @@ describe("OpenAssetApiClient", () => {
     expect(fetcher.mock.calls[2][0]).toContain(
       "/api/files/history?workspace_id=workspace-1&path=Content%2FHero.uasset&limit=25",
     );
+  });
+
+  it("downloads an authenticated immutable revision preview", async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response("preview", {
+      status: 200,
+      headers: { "content-type": "image/png" },
+    }));
+    const client = new OpenAssetApiClient("http://server", fetcher as unknown as typeof fetch);
+
+    const preview = await client.downloadPreview("token", "workspace-1", "Scenes/Shot.blend", 3);
+
+    expect(preview?.size).toBe(7);
+    expect(fetcher.mock.calls[0][0]).toContain(
+      "/api/files/preview?workspace_id=workspace-1&path=Scenes%2FShot.blend&revision_number=3",
+    );
+    expect((fetcher.mock.calls[0][1]?.headers as Record<string, string>).authorization).toBe(
+      "Bearer token",
+    );
+  });
+
+  it("loads review media and creates revision-bound comments", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/reviews/media")) {
+        return new Response("model", { status: 200, headers: { "content-type": "model/gltf-binary" } });
+      }
+      return jsonResponse({
+        id: "comment-1",
+        path: "Models/Hero.glb",
+        revision_number: 4,
+        author_user_id: "user-1",
+        author: "Artist",
+        body: "Adjust the arc",
+        created_at: "2026-06-30T10:00:00Z",
+      });
+    });
+    const client = new OpenAssetApiClient("http://server", fetcher as unknown as typeof fetch);
+
+    const media = await client.downloadReviewMedia("token", "workspace-1", "Models/Hero.glb", 4);
+    await client.createReviewComment("token", {
+      workspace_id: "workspace-1",
+      path: "Models/Hero.glb",
+      revision_number: 4,
+      body: "Adjust the arc",
+      timecode_ms: 1250,
+      frame_number: 30,
+    });
+
+    expect(media?.type).toBe("model/gltf-binary");
+    expect(fetcher.mock.calls[0][0]).toContain("/api/reviews/media?");
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      "http://server/api/reviews/comments",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("reads exact review-proxy timebase response headers", async () => {
+    const fetcher = vi.fn(async () => new Response("proxy", {
+      status: 200,
+      headers: {
+        "content-type": "model/gltf-binary",
+        "x-review-frame-rate-numerator": "24000",
+        "x-review-frame-rate-denominator": "1001",
+        "x-review-start-frame": "1001",
+      },
+    }));
+    const client = new OpenAssetApiClient("http://server", fetcher as unknown as typeof fetch);
+
+    const proxy = await client.downloadReviewProxy(
+      "token",
+      "workspace-1",
+      "Models/Hero.fbx",
+      4,
+    );
+
+    expect(proxy?.blob.type).toBe("model/gltf-binary");
+    expect(proxy).toMatchObject({
+      frameRateNumerator: 24_000,
+      frameRateDenominator: 1_001,
+      startFrame: 1_001,
+    });
   });
 
   it("creates depots and streams with idempotency keys", async () => {

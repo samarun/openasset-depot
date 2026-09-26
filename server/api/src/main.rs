@@ -1,9 +1,9 @@
 use openasset_api::{
     api::{build_router, AppState},
-    config::Config,
+    config::{Config, StorageBackend},
     error::AppResult,
     filetypes::FileTypeMatcher,
-    storage::LocalObjectStore,
+    storage::ObjectStore,
 };
 use sqlx::postgres::PgPoolOptions;
 use tokio::signal;
@@ -27,8 +27,12 @@ async fn main() -> AppResult<()> {
     }
 
     let rules = FileTypeMatcher::load_from_db(&pool).await?;
-    let storage = LocalObjectStore::new(config.storage_root.clone(), config.chunk_size).await?;
+    let storage = build_storage(&config).await?;
+    tracing::info!(backend = %storage.describe(), "object storage ready");
+
     let state = AppState::new(config.clone(), pool, storage, rules);
+    let integrity_worker = openasset_api::worker::spawn_integrity_worker(state.clone());
+
     let app = build_router(state);
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     tracing::info!(addr = %config.bind_addr, "openasset api listening");
@@ -36,7 +40,37 @@ async fn main() -> AppResult<()> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+
+    if let Some(worker) = integrity_worker {
+        worker.abort();
+    }
     Ok(())
+}
+
+async fn build_storage(config: &Config) -> AppResult<ObjectStore> {
+    match &config.storage_backend {
+        StorageBackend::Local => {
+            ObjectStore::new(config.storage_root.clone(), config.chunk_size).await
+        }
+        #[cfg(feature = "s3")]
+        StorageBackend::S3 {
+            bucket,
+            prefix,
+            endpoint_url,
+        } => {
+            let backend = openasset_api::storage::S3ChunkBackend::new(
+                bucket.clone(),
+                prefix.clone(),
+                endpoint_url.clone(),
+            )
+            .await?;
+            ObjectStore::with_backend(std::sync::Arc::new(backend), config.chunk_size)
+        }
+        #[cfg(not(feature = "s3"))]
+        StorageBackend::S3 { .. } => Err(openasset_api::error::AppError::configuration(
+            "OAD_STORAGE_BACKEND=s3 requires a server built with the `s3` cargo feature",
+        )),
+    }
 }
 
 async fn shutdown_signal() {

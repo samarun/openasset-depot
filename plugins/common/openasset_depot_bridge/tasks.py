@@ -4,12 +4,44 @@ from __future__ import annotations
 
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
+from queue import Empty, SimpleQueue
 from typing import Any, Callable, Optional, Set
 
 
 Schedule = Callable[[Callable[[], None]], None]
 Callback = Callable[[Any], None]
 ErrorCallback = Callable[[Exception], None]
+
+
+class CallbackQueue:
+    """Thread-safe callbacks drained by hosts from their UI thread."""
+
+    def __init__(self) -> None:
+        self._callbacks: SimpleQueue[Callable[[], None]] = SimpleQueue()
+
+    def schedule(self, callback: Callable[[], None]) -> None:
+        self._callbacks.put(callback)
+
+    def drain(self) -> int:
+        count = 0
+        while True:
+            try:
+                callback = self._callbacks.get_nowait()
+            except Empty:
+                return count
+            callback()
+            count += 1
+
+    def clear(self) -> None:
+        while True:
+            try:
+                self._callbacks.get_nowait()
+            except Empty:
+                return
+
+    @property
+    def empty(self) -> bool:
+        return self._callbacks.empty()
 
 
 class TaskRunner:
@@ -34,16 +66,20 @@ class TaskRunner:
             self._futures.add(future)
 
         def complete(done: Future[Any]) -> None:
-            with self._lock:
-                self._futures.discard(done)
             try:
-                result = done.result()
-            except Exception as error:
-                if on_error:
-                    schedule(lambda error=error: on_error(error))
-            else:
-                if on_success:
-                    schedule(lambda: on_success(result))
+                try:
+                    result = done.result()
+                except Exception as error:
+                    if on_error:
+                        schedule(lambda error=error: on_error(error))
+                else:
+                    if on_success:
+                        schedule(lambda: on_success(result))
+            finally:
+                # Keep the future pending until its UI callback is queued. Hosts
+                # that poll pending_count cannot otherwise miss a fast result.
+                with self._lock:
+                    self._futures.discard(done)
 
         future.add_done_callback(complete)
         return future

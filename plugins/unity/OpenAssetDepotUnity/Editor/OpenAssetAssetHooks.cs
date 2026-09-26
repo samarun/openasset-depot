@@ -39,7 +39,7 @@ namespace OpenAssetDepot.Unity
             if (blocked.Count > 0)
             {
                 EditorUtility.DisplayDialog(
-                    "OpenAsset Checkout Required",
+                    OpenAssetWords.ProductName + ": " + OpenAssetWords.Checkout + " Required",
                     "Unity did not save these assets because checkout failed:\n\n" + string.Join("\n", blocked),
                     "OK");
             }

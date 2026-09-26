@@ -150,6 +150,33 @@ ECommandResult::Type FOpenAssetDepotProvider::Execute(
     EConcurrency::Type InConcurrency,
     const FSourceControlOperationComplete& InOperationCompleteDelegate)
 {
+    const FName OperationName = InOperation->GetName();
+    if (OperationName == FSync::StaticName())
+    {
+        StatusText = NSLOCTEXT("OpenAssetDepot", "Syncing", "Syncing latest project files…");
+    }
+    else if (OperationName == FCheckIn::StaticName())
+    {
+        StatusText = NSLOCTEXT("OpenAssetDepot", "Submitting", "Validating and submitting project changes…");
+    }
+    else if (OperationName == FCheckOut::StaticName())
+    {
+        StatusText = NSLOCTEXT("OpenAssetDepot", "CheckingOut", "Checking out selected assets…");
+    }
+    else if (OperationName == FMarkForAdd::StaticName())
+    {
+        StatusText = NSLOCTEXT("OpenAssetDepot", "Adding", "Adding selected assets…");
+    }
+    else if (OperationName == FUpdateStatus::StaticName())
+    {
+        StatusText = NSLOCTEXT("OpenAssetDepot", "Refreshing", "Refreshing asset status…");
+    }
+    else
+    {
+        StatusText = NSLOCTEXT("OpenAssetDepot", "Working", "Updating OpenAsset Depot…");
+    }
+    BroadcastStateChanged();
+
     if (InConcurrency == EConcurrency::Asynchronous)
     {
         if (bClosing.Load()) return ECommandResult::Failed;
@@ -211,7 +238,7 @@ TSharedRef<SWidget> FOpenAssetDepotProvider::MakeSettingsWidget() const
                 SNew(STextBlock).Text(NSLOCTEXT(
                     "OpenAssetDepot",
                     "SettingsHelp",
-                    "Use the OpenAsset desktop app to create a workspace, then run 'oad login'. Set OAD_CLI if the CLI is not on PATH."))
+                    "Sign in and connect this project folder once in the OpenAsset desktop app. The desktop app shares the session with creative plug-ins automatically. Set OAD_CLI only for a custom tools installation."))
                 .AutoWrapText(true)
             ]
         ];
@@ -321,6 +348,20 @@ bool FOpenAssetDepotProvider::RunCli(
     FString& OutError) const
 {
     FString CliPath = FPlatformMisc::GetEnvironmentVariable(TEXT("OAD_CLI"));
+#if PLATFORM_MAC
+    if (CliPath.IsEmpty())
+    {
+        const FString DesktopCli = TEXT("/Applications/OpenAsset Depot.app/Contents/MacOS/oad");
+        if (FPaths::FileExists(DesktopCli)) CliPath = DesktopCli;
+    }
+#elif PLATFORM_WINDOWS
+    if (CliPath.IsEmpty())
+    {
+        const FString LocalAppData = FPlatformMisc::GetEnvironmentVariable(TEXT("LOCALAPPDATA"));
+        const FString DesktopCli = FPaths::Combine(LocalAppData, TEXT("OpenAsset Depot"), TEXT("oad.exe"));
+        if (FPaths::FileExists(DesktopCli)) CliPath = DesktopCli;
+    }
+#endif
     if (CliPath.IsEmpty()) CliPath = TEXT("oad");
     TArray<FString> FullArguments{TEXT("--cwd"), FPaths::ConvertRelativePathToFull(FPaths::ProjectDir())};
     FullArguments.Append(Arguments);

@@ -11,6 +11,13 @@ const { OpenAssetCli } = (() => {
     return require('../../common/node/openasset-cli');
   }
 })();
+const words = (() => {
+  try {
+    return require('./lib/words');
+  } catch (_) {
+    return require('../../common/node/words');
+  }
+})();
 
 const PLUGIN_ID = 'com.openassetdepot.resolve';
 const SETTINGS_FILE = 'settings.json';
@@ -86,8 +93,22 @@ async function chooseWorkspace() {
   return result.canceled ? null : result.filePaths[0];
 }
 
+// The renderer is sandboxed with context isolation, so it cannot require the
+// shared vocabulary the way the Adobe panel does. Only the label tables cross
+// the IPC boundary; the helper functions would not survive the structured
+// clone, so the renderer composes its badge text from STATUSES.
+function vocabulary() {
+  return {
+    PRODUCT_NAME: words.PRODUCT_NAME,
+    ACTIONS: words.ACTIONS,
+    STATUSES: words.STATUSES,
+    FIELDS: words.FIELDS,
+    MESSAGES: words.MESSAGES,
+  };
+}
+
 async function runCommand(_event, command, options) {
-  const allowed = new Set(['context', 'status', 'checkout', 'add', 'sync', 'validate', 'revert', 'submit']);
+  const allowed = new Set(['context', 'status', 'checkout', 'add', 'sync', 'validate', 'revert', 'submit', 'shelve', 'unshelve']);
   if (!allowed.has(command)) throw new Error(`Unsupported command: ${command}`);
   return new OpenAssetCli(loadSettings()).run(command, options || {});
 }
@@ -96,6 +117,7 @@ function registerHandlers() {
   ipcMain.handle('oad:settings:get', loadSettings);
   ipcMain.handle('oad:settings:save', saveSettings);
   ipcMain.handle('oad:settings:chooseWorkspace', chooseWorkspace);
+  ipcMain.handle('oad:words', vocabulary);
   ipcMain.handle('oad:resolve:selectedMedia', selectedMedia);
   ipcMain.handle('oad:command', runCommand);
 }

@@ -125,75 +125,143 @@ pub async fn delete_workspace(
     Path(workspace_id): Path<Uuid>,
 ) -> AppResult<Json<DeleteWorkspaceResponse>> {
     let user = state.require_user(&headers)?;
-    let mut tx = state.db.begin().await?;
-    let row = sqlx::query(
-        r#"
+    // Deleting a workspace releases locks and abandons changelists, so a retry
+    // must replay the original counts rather than report zero or a 404.
+    let request = serde_json::json!({ "workspace_id": workspace_id });
+    let response = idempotency::run(
+        &state.db,
+        &headers,
+        &user,
+        "workspace_delete",
+        &request,
+        || async {
+            let mut tx = state.db.begin().await?;
+            let row = sqlx::query(
+                r#"
         SELECT id, stream_id
         FROM workspaces
         WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
         FOR UPDATE
         "#,
-    )
-    .bind(workspace_id)
-    .bind(user.user_id)
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or_else(|| AppError::NotFound("workspace not found".to_string()))?;
-    let stream_id: Uuid = row.get("stream_id");
+            )
+            .bind(workspace_id)
+            .bind(user.user_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or_else(|| AppError::NotFound("workspace not found".to_string()))?;
+            let stream_id: Uuid = row.get("stream_id");
 
-    let released_locks = sqlx::query(
-        r#"
+            let released_locks = sqlx::query(
+                r#"
         UPDATE locks
         SET state = 'released', released_at = now()
         WHERE workspace_id = $1 AND state = 'active'
         "#,
-    )
-    .bind(workspace_id)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
+            )
+            .bind(workspace_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
 
-    let abandoned_changelists = sqlx::query(
-        r#"
+            let abandoned_changelists = sqlx::query(
+                r#"
         UPDATE changelists
         SET status = 'abandoned'
         WHERE workspace_id = $1 AND status = 'pending'
         "#,
-    )
-    .bind(workspace_id)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
-
-    sqlx::query("UPDATE workspaces SET deleted_at = now(), updated_at = now() WHERE id = $1")
-        .bind(workspace_id)
-        .execute(&mut *tx)
-        .await?;
-
-    audit::record_tx(
-        &mut tx,
-        audit::AuditEvent {
-            actor_user_id: Some(user.user_id),
-            stream_id: Some(stream_id),
-            workspace_id: Some(workspace_id),
-            ..audit::AuditEvent::new(
-                "workspace_delete",
-                serde_json::json!({
-                    "released_locks": released_locks,
-                    "abandoned_changelists": abandoned_changelists,
-                }),
             )
+            .bind(workspace_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+
+            sqlx::query(
+                "UPDATE workspaces SET deleted_at = now(), updated_at = now() WHERE id = $1",
+            )
+            .bind(workspace_id)
+            .execute(&mut *tx)
+            .await?;
+
+            audit::record_tx(
+                &mut tx,
+                audit::AuditEvent {
+                    actor_user_id: Some(user.user_id),
+                    stream_id: Some(stream_id),
+                    workspace_id: Some(workspace_id),
+                    ..audit::AuditEvent::new(
+                        "workspace_delete",
+                        serde_json::json!({
+                            "released_locks": released_locks,
+                            "abandoned_changelists": abandoned_changelists,
+                        }),
+                    )
+                },
+            )
+            .await?;
+            tx.commit().await?;
+
+            Ok(DeleteWorkspaceResponse {
+                id: workspace_id,
+                deleted: true,
+                released_locks,
+                abandoned_changelists,
+            })
         },
     )
     .await?;
-    tx.commit().await?;
+    Ok(Json(response))
+}
 
-    Ok(Json(DeleteWorkspaceResponse {
-        id: workspace_id,
-        deleted: true,
-        released_locks,
-        abandoned_changelists,
-    }))
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CollaboratorResponse {
+    pub user_id: Uuid,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub role: String,
+    pub is_admin: bool,
+}
+
+/// People who can open this depot: assigned members plus system admins.
+///
+/// Review assignment needs this list, and an ordinary artist cannot call the
+/// admin-only depot permission endpoint, so the workspace they already belong
+/// to is the place to look it up.
+pub async fn list_collaborators(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(workspace_id): Path<Uuid>,
+) -> AppResult<Json<Vec<CollaboratorResponse>>> {
+    let user = state.require_user(&headers)?;
+    let workspace = workspace_for_user(&state.db, workspace_id, &user).await?;
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            u.id,
+            u.username,
+            u.display_name,
+            u.is_admin,
+            COALESCE(p.role, 'admin') AS role
+        FROM users u
+        LEFT JOIN effective_depot_permissions p
+          ON p.user_id = u.id AND p.depot_id = $1
+        WHERE p.user_id IS NOT NULL OR u.is_admin
+        ORDER BY u.username
+        "#,
+    )
+    .bind(workspace.depot_id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|row| CollaboratorResponse {
+                user_id: row.get("id"),
+                username: row.get("username"),
+                display_name: row.get("display_name"),
+                role: row.get("role"),
+                is_admin: row.get("is_admin"),
+            })
+            .collect(),
+    ))
 }
 
 pub async fn workspace_for_user(

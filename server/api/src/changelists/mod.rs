@@ -39,14 +39,14 @@ pub struct ChangelistResponse {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct FileOpRequest {
     pub workspace_id: Uuid,
     pub changelist_id: Option<Uuid>,
     pub path: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct FileOpResponse {
     pub path: String,
     pub action: String,
@@ -70,6 +70,13 @@ pub struct SubmittedRevision {
 struct SubmittedUpload {
     path: String,
     manifest: BlobManifest,
+}
+
+/// One file already staged in the chunk store by a resumable upload session.
+#[derive(Debug, Deserialize)]
+struct StagedUpload {
+    path: String,
+    blob_hash: String,
 }
 
 pub async fn create_changelist(
@@ -156,36 +163,42 @@ pub async fn file_revert(
     let workspace = workspace_for_user(&state.db, req.workspace_id, &user).await?;
     let path = normalize_depot_path(&req.path)?;
 
-    if let Some(changelist_id) = req.changelist_id {
-        ensure_pending_changelist_for_workspace(
-            &state.db,
-            changelist_id,
-            user.user_id,
-            workspace.id,
-        )
-        .await?;
-        sqlx::query("DELETE FROM changelist_files WHERE changelist_id = $1 AND depot_path = $2")
+    let response = idempotency::run(&state.db, &headers, &user, "file_revert", &req, || async {
+        if let Some(changelist_id) = req.changelist_id {
+            ensure_pending_changelist_for_workspace(
+                &state.db,
+                changelist_id,
+                user.user_id,
+                workspace.id,
+            )
+            .await?;
+            sqlx::query(
+                "DELETE FROM changelist_files WHERE changelist_id = $1 AND depot_path = $2",
+            )
             .bind(changelist_id)
             .bind(&path)
             .execute(&state.db)
             .await?;
-    }
-    audit::record(
-        &state.db,
-        audit::AuditEvent {
-            actor_user_id: Some(user.user_id),
-            stream_id: Some(workspace.stream_id),
-            workspace_id: Some(workspace.id),
-            depot_path: Some(&path),
-            changelist_id: req.changelist_id,
-            ..audit::AuditEvent::new("revert", serde_json::json!({}))
-        },
-    )
+        }
+        audit::record(
+            &state.db,
+            audit::AuditEvent {
+                actor_user_id: Some(user.user_id),
+                stream_id: Some(workspace.stream_id),
+                workspace_id: Some(workspace.id),
+                depot_path: Some(&path),
+                changelist_id: req.changelist_id,
+                ..audit::AuditEvent::new("revert", serde_json::json!({}))
+            },
+        )
+        .await?;
+        Ok(FileOpResponse {
+            path: path.clone(),
+            action: "revert".to_string(),
+        })
+    })
     .await?;
-    Ok(Json(FileOpResponse {
-        path,
-        action: "revert".to_string(),
-    }))
+    Ok(Json(response))
 }
 
 async fn file_op(
@@ -212,46 +225,51 @@ async fn file_op(
         }
     }
 
-    if let Some(changelist_id) = req.changelist_id {
-        ensure_pending_changelist_for_workspace(
-            &state.db,
-            changelist_id,
-            user.user_id,
-            workspace.id,
-        )
-        .await?;
-        sqlx::query(
-            r#"
+    let response = idempotency::run(&state.db, &headers, &user, audit_event, &req, || async {
+        if let Some(changelist_id) = req.changelist_id {
+            ensure_pending_changelist_for_workspace(
+                &state.db,
+                changelist_id,
+                user.user_id,
+                workspace.id,
+            )
+            .await?;
+            sqlx::query(
+                r#"
             INSERT INTO changelist_files (changelist_id, depot_path, action)
             VALUES ($1, $2, $3)
             ON CONFLICT (changelist_id, depot_path)
             DO UPDATE SET action = EXCLUDED.action
             "#,
-        )
-        .bind(changelist_id)
-        .bind(&path)
-        .bind(action)
-        .execute(&state.db)
-        .await?;
-    }
+            )
+            .bind(changelist_id)
+            .bind(&path)
+            .bind(action)
+            .execute(&state.db)
+            .await?;
+        }
 
-    audit::record(
-        &state.db,
-        audit::AuditEvent {
-            actor_user_id: Some(user.user_id),
-            stream_id: Some(workspace.stream_id),
-            workspace_id: Some(workspace.id),
-            depot_path: Some(&path),
-            changelist_id: req.changelist_id,
-            ..audit::AuditEvent::new(audit_event, serde_json::json!({ "action": action }))
-        },
-    )
+        audit::record(
+            &state.db,
+            audit::AuditEvent {
+                actor_user_id: Some(user.user_id),
+                stream_id: Some(workspace.stream_id),
+                workspace_id: Some(workspace.id),
+                depot_path: Some(&path),
+                changelist_id: req.changelist_id,
+                ..audit::AuditEvent::new(audit_event, serde_json::json!({ "action": action }))
+            },
+        )
+        .await?;
+
+        Ok(FileOpResponse {
+            path: path.clone(),
+            action: action.to_string(),
+        })
+    })
     .await?;
 
-    Ok(Json(FileOpResponse {
-        path,
-        action: action.to_string(),
-    }))
+    Ok(Json(response))
 }
 
 pub async fn submit_changelist(
@@ -274,6 +292,28 @@ pub async fn submit_changelist(
                 Uuid::parse_str(value.trim())
                     .map_err(|_| AppError::bad_request("workspace_id must be a UUID"))?,
             );
+            continue;
+        }
+
+        // Files staged through a resumable upload session arrive as hashes: the
+        // bytes are already in the chunk store, so submit only has to name them.
+        if name == "staged" {
+            let value = field.text().await?;
+            let staged: Vec<StagedUpload> = serde_json::from_str(&value)
+                .map_err(|error| AppError::bad_request(format!("invalid staged field: {error}")))?;
+            for entry in staged {
+                let depot_path = normalize_depot_path(&entry.path)?;
+                if !submitted_paths.insert(depot_path.clone()) {
+                    return Err(AppError::bad_request(format!(
+                        "duplicate file part for depot path {depot_path}"
+                    )));
+                }
+                let manifest = state.storage.read_manifest(&entry.blob_hash).await?;
+                uploads.push(SubmittedUpload {
+                    path: depot_path,
+                    manifest,
+                });
+            }
             continue;
         }
 
@@ -735,7 +775,7 @@ async fn ensure_pending_changelist_for_workspace(
     }
 }
 
-async fn insert_blob_records(
+pub(crate) async fn insert_blob_records(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     manifest: &BlobManifest,
 ) -> AppResult<()> {

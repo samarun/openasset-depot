@@ -1,6 +1,6 @@
 {
   "name": "com.openasset.depot",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "displayName": "OpenAsset Depot",
   "description": "Production asset version control, locking, sync, and submit workflows.",
   "unity": "2022.3",

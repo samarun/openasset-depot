@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default desktop window capability","local":true,"windows":["main"],"permissions":["core:default","dialog:allow-open"]}}
+{"default":{"identifier":"default","description":"Default desktop window capability","local":true,"windows":["main"],"permissions":["core:default","dialog:allow-open","notification:default","notification:allow-notify","notification:allow-request-permission","notification:allow-is-permission-granted","opener:allow-open-url"]}}

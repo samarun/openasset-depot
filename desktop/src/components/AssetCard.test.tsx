@@ -29,4 +29,16 @@ describe("AssetCard", () => {
     fireEvent.click(card);
     expect(onSelect).toHaveBeenCalledWith(file);
   });
+
+  it("shows a submitted revision preview when one is available", async () => {
+    const previewFile = { ...file, previewAvailable: true };
+    const loadPreview = vi.fn(async () => "data:image/png;base64,cHJldmlldw==");
+    render(<AssetCard file={previewFile} onSelect={vi.fn()} loadPreview={loadPreview} />);
+
+    expect(await screen.findByAltText("Hero.uasset preview")).toHaveAttribute(
+      "src",
+      "data:image/png;base64,cHJldmlldw==",
+    );
+    expect(loadPreview).toHaveBeenCalledWith(previewFile);
+  });
 });

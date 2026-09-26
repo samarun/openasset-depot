@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { UserSession, Workspace } from "../types/domain";
+import { createUuid } from "../utils/uuid";
 import { isNativeDesktop } from "./workspaces";
 
 export type IntegrationCommand =
@@ -15,6 +16,8 @@ export type IntegrationCommand =
   | "revert"
   | "sync"
   | "submit"
+  | "shelve"
+  | "unshelve"
   | "history"
   | "validate";
 
@@ -33,6 +36,13 @@ export interface IntegrationProgress {
   message: string;
   completed?: number;
   total?: number;
+  /** Depot path currently being transferred, when the CLI knows one. */
+  path?: string;
+  filesCompleted?: number;
+  /** Absent while a paged sync is still discovering how much work remains. */
+  filesTotal?: number;
+  bytesCompleted?: number;
+  bytesTotal?: number;
 }
 
 export interface PendingIntegrationFile {
@@ -55,7 +65,7 @@ export async function runWorkspaceIntegration<T>(
   if (!isNativeDesktop()) {
     return Promise.reject(new Error("This file operation requires the OpenAsset Depot desktop app."));
   }
-  const operationId = crypto.randomUUID();
+  const operationId = createUuid();
   const unlisten = options.onProgress
     ? await listen<IntegrationProgress>("oad://operation-progress", (event) => {
         if (event.payload.operationId === operationId) options.onProgress?.(event.payload);

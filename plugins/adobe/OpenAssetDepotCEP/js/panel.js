@@ -10,8 +10,27 @@
     }
   })();
   const { OpenAssetCli } = bridgeModule;
+  const { STATUSES, statusFromBridge } = (() => {
+    try {
+      return require('../lib/words');
+    } catch (_) {
+      return require('../../../common/node/words');
+    }
+  })();
+  // Which badge tone each canonical status is drawn in. Follows STATUS_COLORS
+  // in plugins/common/openasset_depot_bridge/theme.py, except that the shared
+  // stylesheet has no accent badge, so "Checked Out" borrows the good tone.
+  const STATUS_TONES = {
+    [STATUSES.up_to_date]: 'good',
+    [STATUSES.checked_out]: 'good',
+    [STATUSES.needs_sync]: 'warn',
+    [STATUSES.ready_to_submit]: 'warn',
+    [STATUSES.in_use]: 'bad',
+    [STATUSES.blocked]: 'bad',
+    [STATUSES.marked_for_delete]: 'bad',
+  };
   const $ = (id) => document.getElementById(id);
-  const controls = ['refresh', 'checkout', 'add', 'sync', 'validate', 'revert', 'submit'];
+  const controls = ['refresh', 'checkout', 'add', 'sync', 'validate', 'revert', 'submit', 'shelve', 'unshelve'];
   let activePath = '';
   let client = null;
 
@@ -51,31 +70,19 @@
 
   function showMessage(message, isError) {
     $('message').textContent = message;
-    $('message').style.color = isError ? '#efaaa3' : '';
+    $('message').style.color = isError ? 'var(--oad-red)' : '';
   }
 
   function setStatus(file) {
     const badge = $('status');
-    badge.className = 'status neutral';
     if (!file) {
-      badge.textContent = 'Not tracked';
+      badge.className = 'status';
+      badge.textContent = STATUSES.new_file;
       return;
     }
-    if (file.lock_state === 'other') {
-      badge.textContent = 'Checked out by another artist';
-      badge.className = 'status bad';
-    } else if (file.pending_action) {
-      badge.textContent = `${file.pending_action} ready to submit`;
-      badge.className = 'status warn';
-    } else if (file.needs_sync) {
-      badge.textContent = 'New version available';
-      badge.className = 'status warn';
-    } else if (file.local_state === 'untracked') {
-      badge.textContent = 'Not tracked';
-    } else {
-      badge.textContent = file.lock_state === 'mine' ? 'Checked out by you' : 'Available to edit';
-      badge.className = 'status good';
-    }
+    const label = statusFromBridge(file);
+    badge.className = `status ${STATUS_TONES[label] || ''}`.trimEnd();
+    badge.textContent = label;
   }
 
   async function refresh() {
@@ -107,7 +114,7 @@
   }
 
   async function run(command, options) {
-    if (!client || !activePath && !['sync', 'submit'].includes(command)) {
+    if (!client || !activePath && !['sync', 'submit', 'shelve', 'unshelve'].includes(command)) {
       showMessage('Open a saved document in the workspace first', true);
       return;
     }
@@ -140,6 +147,8 @@
   $('submit').addEventListener('click', () => run('submit', {
     description: $('description').value.trim() || 'Submitted from Adobe Creative Cloud',
   }));
+  $('shelve').addEventListener('click', () => run('shelve', {}));
+  $('unshelve').addEventListener('click', () => run('unshelve', {}));
 
   configure();
   refresh();

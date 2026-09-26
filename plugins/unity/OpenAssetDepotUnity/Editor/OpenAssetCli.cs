@@ -85,6 +85,30 @@ namespace OpenAssetDepot.Unity
             });
         }
 
+        internal static Task<ShelfData> ShelveAsync()
+        {
+            return Task.Run(() =>
+            {
+                var envelope = JsonUtility.FromJson<ShelfEnvelope>(Run(
+                    new[] { "integration", "shelve" }, 30 * 60 * 1000));
+                EnsureEnvelope(envelope != null ? envelope.protocol_version : 0, envelope != null && envelope.ok,
+                    envelope != null ? envelope.error : null);
+                return envelope.data ?? new ShelfData { files = Array.Empty<ShelvedFile>() };
+            });
+        }
+
+        internal static Task<UnshelveData> UnshelveAsync()
+        {
+            return Task.Run(() =>
+            {
+                var envelope = JsonUtility.FromJson<UnshelveEnvelope>(Run(
+                    new[] { "integration", "unshelve" }, 30 * 60 * 1000));
+                EnsureEnvelope(envelope != null ? envelope.protocol_version : 0, envelope != null && envelope.ok,
+                    envelope != null ? envelope.error : null);
+                return envelope.data ?? new UnshelveData { restored_count = 0, written = Array.Empty<string>() };
+            });
+        }
+
         internal static Task<ValidationData> ValidateAsync(IReadOnlyList<string> assetPaths)
         {
             return Task.Run(() =>

@@ -42,6 +42,20 @@ export async function chooseWorkspaceFiles(root: string): Promise<string[]> {
   return typeof selection === "string" ? [selection] : [];
 }
 
+export async function configureCliSession(session: {
+  serverUrl: string;
+  token: string;
+  username: string;
+}): Promise<void> {
+  if (!isNativeDesktop() || session.token === "mock-preview-token") return;
+  await invoke("configure_cli_session", { request: session });
+}
+
+export async function clearCliSession(): Promise<void> {
+  if (!isNativeDesktop()) return;
+  await invoke("clear_cli_session");
+}
+
 export async function initializeLocalWorkspace(
   workspace: Workspace,
   depot: string,

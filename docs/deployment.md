@@ -6,6 +6,92 @@ DCC integrations connect to the API directly; they are not containers.
 
 ## Ubuntu production host
 
+### Existing host Nginx
+
+Use this topology when Nginx is already installed on the Ubuntu server. Docker
+builds two application images:
+
+- `openasset-depot-api:latest`: the Rust API.
+- `openasset-depot-web:latest`: the React web build plus its internal API gateway.
+
+PostgreSQL and the API have no host ports. The web gateway is bound only to
+`127.0.0.1:5173`, so it can be reached by host Nginx but not directly from the
+Internet. Set `OAD_WEB_BIND=0.0.0.0` only when direct LAN access is required,
+and keep port 5173 blocked from the Internet.
+
+On the Ubuntu server:
+
+```sh
+git clone https://github.com/samarun/openasset-depot.git
+cd openasset-depot
+./deploy/ubuntu-nginx-up.sh depot.example.com
+```
+
+The script generates `deploy/.env.ubuntu-nginx`, builds the Linux images for the
+server's native architecture, starts PostgreSQL/API/web, and prints container
+status. Install the supplied host Nginx site after replacing the example domain:
+
+```sh
+sudo cp deploy/nginx/openasset-depot.conf /etc/nginx/sites-available/openasset-depot
+sudo sed -i 's/depot\.example\.com/your-domain.example/g' \
+  /etc/nginx/sites-available/openasset-depot
+sudo ln -sfn /etc/nginx/sites-available/openasset-depot \
+  /etc/nginx/sites-enabled/openasset-depot.conf
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Confirm that `/etc/nginx/nginx.conf` includes `/etc/nginx/sites-enabled/*.conf`,
+then confirm the server block is active with
+`sudo nginx -T | grep -n your-domain.example`.
+
+Enable HTTPS with the certificate workflow already used on the server. With
+Certbot's Nginx integration, that is typically:
+
+```sh
+sudo certbot --nginx -d your-domain.example
+```
+
+Verify the complete route through host Nginx:
+
+```sh
+curl -fsS https://your-domain.example/ready
+```
+
+The supplied Nginx configuration allows 20 GiB request bodies, disables request
+buffering for streamed asset uploads, and uses 30-minute API timeouts. Keep those
+limits aligned with `OAD_MAX_UPLOAD_BYTES` and `OAD_REQUEST_TIMEOUT_SECONDS`.
+
+For an Intel/AMD server that should not build or pull anything, transfer the
+entire `ubuntu-amd64-bundle/` directory by FTP. It contains compressed
+`linux/amd64` archives for the API, web gateway, and PostgreSQL plus an
+image-only Compose file. On the server, run:
+
+```sh
+cd ubuntu-amd64-bundle
+chmod +x install.sh
+./install.sh depot.example.com
+```
+
+For upgrades:
+
+```sh
+git pull --ff-only
+./deploy/ubuntu-nginx-up.sh
+```
+
+Useful commands:
+
+```sh
+docker image ls 'openasset-depot-*'
+docker compose -f deploy/docker-compose.ubuntu-nginx.yml \
+  --env-file deploy/.env.ubuntu-nginx ps
+docker compose -f deploy/docker-compose.ubuntu-nginx.yml \
+  --env-file deploy/.env.ubuntu-nginx logs -f --tail=200
+```
+
+### Caddy-managed HTTPS
+
 The production topology adds Caddy as the only public container. PostgreSQL and
 the Rust API stay on an internal Docker network, while Caddy provisions and
 renews HTTPS certificates automatically.
@@ -74,6 +160,35 @@ rejects short/example JWT secrets. Configure:
 - `OAD_DATABASE_MAX_CONNECTIONS`: bounded PostgreSQL pool size.
 - `OAD_JWT_TTL_SECONDS`: 60 seconds to 7 days.
 - `OAD_RUN_MIGRATIONS`: set `false` when migrations are managed by deployment tooling.
+- `OAD_ALLOW_SIGNUPS`: permits public self-registration when `true`; new users
+  still need an administrator-granted depot role. Disable it after onboarding.
+
+### Single sign-on (optional)
+
+Leave `OAD_OIDC_ISSUER` unset to stay on username/password auth. Setting it turns
+on the **Continue with** button in the desktop app and requires all of:
+
+- `OAD_OIDC_ISSUER`: provider URL; discovery appends
+  `/.well-known/openid-configuration`.
+- `OAD_OIDC_CLIENT_ID` and `OAD_OIDC_CLIENT_SECRET`: confidential client
+  credentials.
+- `OAD_OIDC_REDIRECT_URI`: use `http://127.0.0.1:18081/callback`, and register the
+  same value with the provider as an allowed redirect. The desktop app opens a
+  loopback listener on port 18081 for a single request, so the port must match
+  exactly; the path is not otherwise significant.
+
+Optional:
+
+- `OAD_OIDC_EXTRA_SCOPES`: space-separated scopes beyond `openid profile email`.
+- `OAD_OIDC_GROUPS_CLAIM`: ID-token claim listing directory groups. Each value is
+  matched against a depot group's `external_id`, so membership follows the
+  directory. Create the group and grant its depot permissions first: sign-on
+  syncs membership but never invents groups or roles.
+- `OAD_OIDC_ADMIN_GROUP`: group whose members receive system-admin rights. This
+  grants admin only, not depot permissions.
+
+The browser build cannot receive the loopback redirect and shows only the
+password form, even against an SSO-enabled server.
 
 Use HTTPS at a reverse proxy/load balancer outside localhost. Forward request IDs
 and retain structured JSON logs. Add external IP-aware authentication throttling;

@@ -71,30 +71,8 @@ pub async fn verify_storage(
             "only admins can verify object storage".to_string(),
         ));
     }
-    let _storage_lease = state.storage_maintenance.read().await;
     let limit = query.limit.unwrap_or(100).clamp(1, 1_000);
-    let hashes: Vec<String> =
-        sqlx::query_scalar("SELECT hash FROM blobs ORDER BY created_at DESC LIMIT $1")
-            .bind(limit)
-            .fetch_all(&state.db)
-            .await?;
-
-    let mut ok = 0usize;
-    let mut failures = Vec::new();
-    for hash in hashes {
-        let report = state.storage.verify_blob(&hash).await;
-        if report.ok {
-            ok += 1;
-        } else {
-            failures.push(report);
-        }
-    }
-    let summary = StorageVerificationSummary {
-        checked: ok + failures.len(),
-        ok,
-        failed: failures.len(),
-        failures,
-    };
+    let summary = run_verification(&state, limit).await?;
     audit::record(
         &state.db,
         audit::AuditEvent {
@@ -125,34 +103,7 @@ pub async fn cleanup_storage(
     }
     let older_than_hours = request.older_than_hours.unwrap_or(24).clamp(1, 8_760);
     let max_delete = request.max_delete.unwrap_or(10_000).clamp(1, 100_000);
-    let cutoff = SystemTime::now()
-        .checked_sub(Duration::from_secs(older_than_hours * 60 * 60))
-        .unwrap_or(SystemTime::UNIX_EPOCH);
-    let _storage_lease = state.storage_maintenance.write().await;
-    let mut summary = StorageCleanupSummary {
-        dry_run: request.dry_run,
-        ..StorageCleanupSummary::default()
-    };
-
-    scan_object_tree(
-        &state,
-        state.storage.blob_manifests_root(),
-        true,
-        cutoff,
-        max_delete,
-        &mut summary,
-    )
-    .await?;
-    scan_object_tree(
-        &state,
-        state.storage.chunk_files_root(),
-        false,
-        cutoff,
-        max_delete,
-        &mut summary,
-    )
-    .await?;
-    summary.delete_limit_reached = !request.dry_run && summary.deleted >= max_delete;
+    let summary = run_cleanup(&state, request.dry_run, older_than_hours, max_delete).await?;
 
     audit::record(
         &state.db,
@@ -173,6 +124,86 @@ pub async fn cleanup_storage(
     )
     .await?;
     Ok(Json(summary))
+}
+
+/// Re-hashes the most recently written blobs and reports any that fail.
+///
+/// Shared by the admin endpoint and the scheduled worker so both apply exactly
+/// the same definition of "healthy".
+pub async fn run_verification(
+    state: &AppState,
+    limit: i64,
+) -> AppResult<StorageVerificationSummary> {
+    let _storage_lease = state.storage_maintenance.read().await;
+    let hashes: Vec<String> =
+        sqlx::query_scalar("SELECT hash FROM blobs ORDER BY created_at DESC LIMIT $1")
+            .bind(limit)
+            .fetch_all(&state.db)
+            .await?;
+
+    let mut ok = 0usize;
+    let mut failures = Vec::new();
+    for hash in hashes {
+        let report = state.storage.verify_blob(&hash).await;
+        if report.ok {
+            ok += 1;
+        } else {
+            failures.push(report);
+        }
+    }
+    Ok(StorageVerificationSummary {
+        checked: ok + failures.len(),
+        ok,
+        failed: failures.len(),
+        failures,
+    })
+}
+
+/// Finds stored objects no database row references any more.
+///
+/// Only objects older than `older_than_hours` are considered, so an upload that
+/// is mid-flight — written to storage but not yet committed to the database —
+/// is never mistaken for garbage.
+pub async fn run_cleanup(
+    state: &AppState,
+    dry_run: bool,
+    older_than_hours: u64,
+    max_delete: usize,
+) -> AppResult<StorageCleanupSummary> {
+    if state.storage.local_root().is_none() {
+        return Err(AppError::bad_request(
+            "orphan cleanup requires the local storage backend; use a bucket lifecycle policy for S3",
+        ));
+    }
+    let cutoff = SystemTime::now()
+        .checked_sub(Duration::from_secs(older_than_hours * 60 * 60))
+        .unwrap_or(SystemTime::UNIX_EPOCH);
+    let _storage_lease = state.storage_maintenance.write().await;
+    let mut summary = StorageCleanupSummary {
+        dry_run,
+        ..StorageCleanupSummary::default()
+    };
+
+    scan_object_tree(
+        state,
+        state.storage.blob_manifests_root(),
+        true,
+        cutoff,
+        max_delete,
+        &mut summary,
+    )
+    .await?;
+    scan_object_tree(
+        state,
+        state.storage.chunk_files_root(),
+        false,
+        cutoff,
+        max_delete,
+        &mut summary,
+    )
+    .await?;
+    summary.delete_limit_reached = !dry_run && summary.deleted >= max_delete;
+    Ok(summary)
 }
 
 async fn scan_object_tree(

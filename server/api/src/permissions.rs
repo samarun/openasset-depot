@@ -13,6 +13,7 @@ use crate::{
     audit,
     auth::AuthUser,
     error::{AppError, AppResult},
+    idempotency,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +39,11 @@ impl DepotPermission {
             Self::Write => "write",
             Self::Admin => "admin",
         }
+    }
+
+    /// Validates a role string from a request and returns its canonical form.
+    pub fn parse_role(role: &str) -> AppResult<&'static str> {
+        Ok(Self::from_role(role)?.as_role())
     }
 
     fn rank(self) -> u8 {
@@ -89,8 +95,10 @@ pub async fn ensure_depot_permission(
         return Ok(());
     }
 
+    // Reads the combined view so a grant held through a group counts exactly
+    // as much as one made directly to the user.
     let role: Option<String> = sqlx::query_scalar(
-        "SELECT role FROM depot_user_permissions WHERE depot_id = $1 AND user_id = $2",
+        "SELECT role FROM effective_depot_permissions WHERE depot_id = $1 AND user_id = $2",
     )
     .bind(depot_id)
     .bind(user.user_id)
@@ -121,34 +129,52 @@ pub async fn grant_depot_permission(
     let user = state.require_user(&headers)?;
     ensure_depot_permission(&state.db, &user, depot_id, DepotPermission::Admin).await?;
     let permission = DepotPermission::from_role(&req.role)?;
-    let row = sqlx::query(
-        r#"
+    // The depot comes from the path, so it has to join the hashed request or the
+    // same key would replay across depots.
+    let request = serde_json::json!({
+        "depot_id": depot_id,
+        "user_id": req.user_id,
+        "role": permission.as_role(),
+    });
+    let response = idempotency::run(
+        &state.db,
+        &headers,
+        &user,
+        "depot_permission_grant",
+        &request,
+        || async {
+            let row = sqlx::query(
+                r#"
         INSERT INTO depot_user_permissions (depot_id, user_id, role, granted_by)
         VALUES ($1, $2, $3, $4)
         ON CONFLICT (depot_id, user_id)
         DO UPDATE SET role = EXCLUDED.role, granted_by = EXCLUDED.granted_by, updated_at = now()
         RETURNING depot_id, user_id, role, granted_by, created_at, updated_at
         "#,
-    )
-    .bind(depot_id)
-    .bind(req.user_id)
-    .bind(permission.as_role())
-    .bind(user.user_id)
-    .fetch_one(&state.db)
-    .await?;
-    let response = permission_response(row);
-    audit::record(
-        &state.db,
-        audit::AuditEvent {
-            actor_user_id: Some(user.user_id),
-            ..audit::AuditEvent::new(
-                "depot_permission_grant",
-                serde_json::json!({
-                    "depot_id": depot_id,
-                    "user_id": response.user_id,
-                    "role": response.role,
-                }),
             )
+            .bind(depot_id)
+            .bind(req.user_id)
+            .bind(permission.as_role())
+            .bind(user.user_id)
+            .fetch_one(&state.db)
+            .await?;
+            let response = permission_response(row);
+            audit::record(
+                &state.db,
+                audit::AuditEvent {
+                    actor_user_id: Some(user.user_id),
+                    ..audit::AuditEvent::new(
+                        "depot_permission_grant",
+                        serde_json::json!({
+                            "depot_id": depot_id,
+                            "user_id": response.user_id,
+                            "role": response.role,
+                        }),
+                    )
+                },
+            )
+            .await?;
+            Ok(response)
         },
     )
     .await?;

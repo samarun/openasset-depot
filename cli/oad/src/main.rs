@@ -12,7 +12,7 @@ use reqwest::multipart::{Form, Part};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::{
     fs,
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
@@ -21,13 +21,8 @@ use walkdir::WalkDir;
 #[derive(Parser)]
 #[command(name = "oad", version, about = "OpenAsset Depot CLI")]
 struct Cli {
-    #[arg(
-        long,
-        global = true,
-        env = "OAD_SERVER_URL",
-        default_value = "http://127.0.0.1:8080"
-    )]
-    server: String,
+    #[arg(long, global = true, env = "OAD_SERVER_URL")]
+    server: Option<String>,
     #[arg(long, global = true, value_name = "DIRECTORY")]
     cwd: Option<PathBuf>,
     #[command(subcommand)]
@@ -61,6 +56,16 @@ enum Command {
         command: ChangeCommand,
     },
     Submit,
+    /// Park the active changelist's pending work on the server without submitting.
+    Shelve,
+    /// Restore this workspace's shelved work as pending changes again.
+    Unshelve,
+    /// List the shelves on this workspace's stream.
+    Shelves {
+        /// Discard the active changelist's shelf instead of listing.
+        #[arg(long)]
+        discard: bool,
+    },
     Revert(PathArg),
     History(PathArg),
     Locks,
@@ -177,6 +182,25 @@ enum IntegrationCommand {
     Submit {
         #[arg(long, default_value = "Submitted from a DCC integration")]
         description: String,
+    },
+    Shelve,
+    Unshelve,
+    Shelves,
+    Preview {
+        path: PathBuf,
+        #[arg(long)]
+        image: PathBuf,
+    },
+    ReviewProxy {
+        path: PathBuf,
+        #[arg(long)]
+        media: PathBuf,
+        /// Exact source frame rate, for example 24 or 24000/1001.
+        #[arg(long)]
+        frame_rate: Option<String>,
+        /// Source timeline frame represented by time zero.
+        #[arg(long, requires = "frame_rate")]
+        start_frame: Option<i32>,
     },
     History {
         path: PathBuf,
@@ -329,6 +353,33 @@ struct SubmittedRevision {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct ShelfResponse {
+    files: Vec<ShelvedFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ShelvedFile {
+    path: String,
+    blob_hash: String,
+    size_bytes: i64,
+    action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ShelfSummary {
+    changelist_id: Uuid,
+    description: String,
+    owner: String,
+    file_count: i64,
+    total_bytes: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DiscardShelfResponse {
+    discarded: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SyncPlanEntry {
     path: String,
     revision_number: i32,
@@ -336,6 +387,8 @@ struct SyncPlanEntry {
     size_bytes: i64,
     #[serde(default)]
     deleted: bool,
+    #[serde(default)]
+    preview_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -460,7 +513,9 @@ async fn main() -> Result<()> {
         std::env::set_current_dir(&cwd)?;
     }
     let mut config = load_global_config().await?;
-    config.server_url = cli.server.trim_end_matches('/').to_string();
+    if let Some(server) = cli.server.as_deref() {
+        config.server_url = server.trim_end_matches('/').to_string();
+    }
     if let Ok(token) = std::env::var("OAD_TOKEN") {
         if !token.trim().is_empty() {
             config.token = Some(token);
@@ -493,6 +548,15 @@ async fn main() -> Result<()> {
         Command::Unlock(arg) => unlock(&client, &config, arg.path).await?,
         Command::Change { command } => change(&client, &config, command).await?,
         Command::Submit => submit(&client, &config).await?,
+        Command::Shelve => shelve(&client, &config).await?,
+        Command::Unshelve => unshelve(&client, &config).await?,
+        Command::Shelves { discard } => {
+            if discard {
+                discard_shelf(&client, &config).await?
+            } else {
+                shelves(&client, &config).await?
+            }
+        }
         Command::Revert(arg) => revert(&client, &config, arg.path).await?,
         Command::History(arg) => history(&client, &config, arg.path).await?,
         Command::Locks => locks(&client, &config).await?,
@@ -760,6 +824,7 @@ async fn sync_workspace(
     let force_full = state.files.is_empty();
     let mut after_path: Option<String> = None;
     let mut synced_count = 0usize;
+    let mut synced_bytes = 0u64;
     if let Some(progress) = progress {
         progress.emit("planning", "Checking the depot for updates", 15);
     }
@@ -787,7 +852,7 @@ async fn sync_workspace(
             for entry in plan {
                 if pending.files.contains_key(&entry.path) {
                     bail!(
-                        "sync would overwrite pending work in {}; submit or revert it first",
+                        "Your pending changes to {} would be lost. Submit or revert them first, then sync.",
                         entry.path
                     );
                 }
@@ -802,11 +867,11 @@ async fn sync_workspace(
                                 })?;
                             }
                             Some(_) => bail!(
-                                "sync would remove locally modified file {}; submit or revert it first",
+                                "{} was deleted in the depot, but your local edits would be lost. Submit or revert them first, then sync.",
                                 entry.path
                             ),
                             None => bail!(
-                                "sync would remove untracked file {}; move or add it first",
+                                "{} was deleted in the depot, but an untracked local file is there. Add it or move it aside, then sync.",
                                 entry.path
                             ),
                         }
@@ -819,7 +884,7 @@ async fn sync_workspace(
                     let expected = current.as_ref().map(|file| file.local_hash.as_str());
                     if hash_file(&target).await?.as_str() != expected.unwrap_or_default() {
                         bail!(
-                            "sync found local modifications in {}; submit or revert them first",
+                            "Your local edits to {} would be lost. Submit or revert them first, then sync.",
                             entry.path
                         );
                     }
@@ -829,11 +894,11 @@ async fn sync_workspace(
                         let hash = hash_file(&target).await?;
                         match current.as_ref() {
                             Some(file) if hash != file.local_hash => bail!(
-                                "sync would overwrite local modifications in {}; submit or revert them first",
+                                "Your local edits to {} would be lost. Submit or revert them first, then sync.",
                                 entry.path
                             ),
                             None if hash != entry.blob_hash => bail!(
-                                "sync would overwrite untracked file {}; move or add it first",
+                                "A local file at {} is not tracked in the depot yet. Add it or move it aside, then sync.",
                                 entry.path
                             ),
                             _ => {}
@@ -844,15 +909,25 @@ async fn sync_workspace(
                     }
                     let local_hash = match local_hash {
                         Some(hash) => hash,
-                        None => download_sync_entry(
-                            client,
-                            config,
-                            workspace.workspace_id,
-                            &workspace.root,
-                            &temp_dir,
-                            &entry,
-                        )
-                        .await?,
+                        None => {
+                            if let Some(progress) = progress {
+                                progress.emit_detailed(
+                                    "transferring",
+                                    format!("Downloading {}", entry.path),
+                                    70,
+                                    ProgressDetail::file(&entry.path, synced_count, synced_bytes),
+                                );
+                            }
+                            download_sync_entry(
+                                client,
+                                config,
+                                workspace.workspace_id,
+                                &workspace.root,
+                                &temp_dir,
+                                &entry,
+                            )
+                            .await?
+                        }
                     };
                     state.files.insert(
                         entry.path.clone(),
@@ -868,14 +943,20 @@ async fn sync_workspace(
                     "revision_number": entry.revision_number,
                 }));
                 synced_count += 1;
+                synced_bytes = synced_bytes.saturating_add(entry.size_bytes.max(0) as u64);
             }
 
             save_state(&workspace_dir, &state).await?;
             if let Some(progress) = progress {
-                progress.emit(
+                progress.emit_detailed(
                     "transferring",
                     format!("Applied {synced_count} file updates"),
                     70,
+                    ProgressDetail {
+                        files_completed: Some(synced_count),
+                        bytes_completed: Some(synced_bytes),
+                        ..ProgressDetail::default()
+                    },
                 );
             }
             let _: serde_json::Value = authed_post_json(
@@ -904,6 +985,10 @@ async fn sync_workspace(
     Ok(SyncOutcome { synced_count })
 }
 
+/// Attempts before a download is reported as failed. Each retry resumes from
+/// the bytes already on disk rather than starting over.
+const DOWNLOAD_ATTEMPTS: usize = 3;
+
 async fn download_sync_entry(
     client: &reqwest::Client,
     config: &GlobalConfig,
@@ -912,47 +997,282 @@ async fn download_sync_entry(
     temp_dir: &Path,
     entry: &SyncPlanEntry,
 ) -> Result<String> {
-    let response = authed_request(config, client.post(api_url(config, "/api/sync/download")))?
-        .json(&serde_json::json!({ "workspace_id": workspace_id, "path": entry.path }))
-        .send()
-        .await?;
-    let mut response = ensure_success(response).await?;
     let target = safe_workspace_target(workspace_root, &entry.path)?;
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).await?;
     }
-    let tmp = temp_dir.join(Uuid::new_v4().to_string());
-    let result: Result<String> = async {
-        let mut file = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&tmp)
-            .await?;
-        let mut hasher = blake3::Hasher::new();
-        while let Some(chunk) = response.chunk().await? {
-            hasher.update(&chunk);
-            file.write_all(&chunk).await?;
+    // Named by content hash, so a partial file is always a valid prefix of the
+    // blob we still want — including across a completely separate `oad sync`
+    // run after a crash or a lost network connection.
+    let partial = temp_dir.join(format!("{}.partial", entry.blob_hash));
+
+    let mut last_error = None;
+    for attempt in 1..=DOWNLOAD_ATTEMPTS {
+        match fetch_into_partial(client, config, workspace_id, entry, &partial).await {
+            Ok(local_hash) => {
+                replace_workspace_file(&partial, &target, temp_dir).await?;
+                return Ok(local_hash);
+            }
+            Err(error) => {
+                // An integrity failure means the bytes on disk cannot be trusted,
+                // so the partial is discarded before the next attempt. Transport
+                // errors leave it in place to be resumed.
+                if error.to_string().contains("integrity check failed") {
+                    let _ = fs::remove_file(&partial).await;
+                }
+                if attempt < DOWNLOAD_ATTEMPTS {
+                    eprintln!(
+                        "retrying {} after attempt {attempt} failed: {error}",
+                        entry.path
+                    );
+                }
+                last_error = Some(error);
+            }
         }
-        file.flush().await?;
-        file.sync_all().await?;
-        drop(file);
-        let local_hash = hasher.finalize().to_hex().to_string();
-        if local_hash != entry.blob_hash {
-            bail!(
-                "integrity check failed while syncing {}: expected {}, received {}",
-                entry.path,
-                entry.blob_hash,
-                local_hash
-            );
+    }
+    Err(last_error.expect("at least one download attempt runs"))
+}
+
+/// Downloads a blob into `partial`, resuming from whatever is already there.
+async fn fetch_into_partial(
+    client: &reqwest::Client,
+    config: &GlobalConfig,
+    workspace_id: Uuid,
+    entry: &SyncPlanEntry,
+    partial: &Path,
+) -> Result<String> {
+    let expected_size = entry.size_bytes.max(0) as u64;
+    let mut resume_from = match fs::metadata(partial).await {
+        Ok(metadata) if metadata.is_file() => metadata.len(),
+        _ => 0,
+    };
+    // A partial that is somehow already complete or oversized tells us nothing
+    // trustworthy; start clean rather than guess.
+    if resume_from >= expected_size && expected_size > 0 {
+        let _ = fs::remove_file(partial).await;
+        resume_from = 0;
+    }
+
+    let mut request = authed_request(config, client.post(api_url(config, "/api/sync/download")))?
+        .json(&serde_json::json!({ "workspace_id": workspace_id, "path": entry.path }));
+    if resume_from > 0 {
+        request = request.header(reqwest::header::RANGE, format!("bytes={resume_from}-"));
+    }
+    let response = request.send().await?;
+
+    // A server without range support answers 200 and sends the whole object,
+    // so the local prefix must be dropped to avoid duplicating those bytes.
+    let resuming = response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+    if resume_from > 0 && !resuming {
+        let _ = fs::remove_file(partial).await;
+        resume_from = 0;
+    }
+    let mut response = ensure_success(response).await?;
+
+    let mut hasher = blake3::Hasher::new();
+    if resume_from > 0 {
+        hash_existing_prefix(partial, &mut hasher).await?;
+    }
+
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(resume_from == 0)
+        .append(resume_from > 0)
+        .open(partial)
+        .await?;
+    while let Some(chunk) = response.chunk().await? {
+        hasher.update(&chunk);
+        file.write_all(&chunk).await?;
+    }
+    file.flush().await?;
+    file.sync_all().await?;
+    drop(file);
+
+    let local_hash = hasher.finalize().to_hex().to_string();
+    if local_hash != entry.blob_hash {
+        bail!(
+            "integrity check failed while syncing {}: expected {}, received {}",
+            entry.path,
+            entry.blob_hash,
+            local_hash
+        );
+    }
+    Ok(local_hash)
+}
+
+/// Files at or above this size are staged through a resumable upload session
+/// instead of being sent as one multipart part.
+///
+/// Small files are cheaper to simply re-send than to negotiate a session for;
+/// large plates, caches, and level files are where losing a connection at 90%
+/// used to mean starting from zero.
+const RESUMABLE_UPLOAD_THRESHOLD: u64 = 64 * 1024 * 1024;
+
+/// Attempts before a staged upload is reported as failed. Each retry asks the
+/// server how much it holds and continues from there.
+const UPLOAD_ATTEMPTS: usize = 3;
+
+#[derive(Debug, Deserialize)]
+struct UploadSessionResponse {
+    upload_id: Uuid,
+    received_bytes: i64,
+    #[serde(default)]
+    finalized: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct FinalizeUploadResponse {
+    blob_hash: String,
+}
+
+struct StagedUpload {
+    upload_id: Uuid,
+    blob_hash: String,
+}
+
+/// Stages one large file and returns the blob hash submit should reference.
+async fn stage_upload(
+    client: &reqwest::Client,
+    config: &GlobalConfig,
+    workspace_id: Uuid,
+    depot_path: &str,
+    purpose: &str,
+    local_path: &Path,
+    size_bytes: u64,
+) -> Result<StagedUpload> {
+    let session: UploadSessionResponse = authed_post_json(
+        client,
+        config,
+        "/api/uploads",
+        &serde_json::json!({
+            "workspace_id": workspace_id,
+            "path": depot_path,
+            "purpose": purpose,
+            "size_bytes": size_bytes,
+        }),
+    )
+    .await?;
+    let upload_id = session.upload_id;
+
+    let mut offset = session.received_bytes.max(0) as u64;
+    // A session left finalized by an earlier run already holds the whole file.
+    if !session.finalized {
+        let mut last_error = None;
+        for attempt in 1..=UPLOAD_ATTEMPTS {
+            if offset >= size_bytes {
+                break;
+            }
+            match send_upload_chunk(client, config, upload_id, local_path, offset).await {
+                Ok(received) => {
+                    offset = received;
+                    last_error = None;
+                    if offset >= size_bytes {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    if attempt < UPLOAD_ATTEMPTS {
+                        eprintln!("retrying {depot_path} after attempt {attempt} failed: {error}");
+                        // The server is the authority on progress; a failed
+                        // request may still have persisted part of its body.
+                        offset = match upload_progress(client, config, upload_id).await {
+                            Ok(received) => received,
+                            Err(_) => offset,
+                        };
+                    }
+                    last_error = Some(error);
+                }
+            }
         }
-        replace_workspace_file(&tmp, &target, temp_dir).await?;
-        Ok(local_hash)
+        if let Some(error) = last_error {
+            return Err(error);
+        }
     }
-    .await;
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp).await;
+
+    let finalized: FinalizeUploadResponse = authed_post_json(
+        client,
+        config,
+        &format!("/api/uploads/{upload_id}/finalize"),
+        &serde_json::json!({}),
+    )
+    .await?;
+    Ok(StagedUpload {
+        upload_id,
+        blob_hash: finalized.blob_hash,
+    })
+}
+
+/// Sends the remainder of the file from `offset`, returning the new byte count.
+async fn send_upload_chunk(
+    client: &reqwest::Client,
+    config: &GlobalConfig,
+    upload_id: Uuid,
+    local_path: &Path,
+    offset: u64,
+) -> Result<u64> {
+    let mut file = fs::File::open(local_path)
+        .await
+        .with_context(|| format!("failed to open {}", local_path.display()))?;
+    file.seek(std::io::SeekFrom::Start(offset)).await?;
+    let body = reqwest::Body::wrap_stream(ReaderStream::new(file));
+    let response = authed_request(
+        config,
+        client
+            .post(api_url(config, &format!("/api/uploads/{upload_id}")))
+            .header("x-upload-offset", offset.to_string())
+            .body(body),
+    )?
+    .send()
+    .await?;
+    let session: UploadSessionResponse = parse_response(response).await?;
+    Ok(session.received_bytes.max(0) as u64)
+}
+
+/// Asks the server how many bytes it currently holds for a session.
+async fn upload_progress(
+    client: &reqwest::Client,
+    config: &GlobalConfig,
+    upload_id: Uuid,
+) -> Result<u64> {
+    let response = authed_request(
+        config,
+        client.get(api_url(config, &format!("/api/uploads/{upload_id}"))),
+    )?
+    .send()
+    .await?;
+    let session: UploadSessionResponse = parse_response(response).await?;
+    Ok(session.received_bytes.max(0) as u64)
+}
+
+/// Re-reads bytes already on disk so the running hash covers the whole file.
+/// Renders a byte count for a listing, in the units an artist thinks in.
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
     }
-    result
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+async fn hash_existing_prefix(partial: &Path, hasher: &mut blake3::Hasher) -> Result<()> {
+    let mut file = fs::File::open(partial).await?;
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(())
 }
 
 async fn replace_workspace_file(source: &Path, target: &Path, _temp_dir: &Path) -> Result<()> {
@@ -1232,6 +1552,10 @@ async fn submit_workspace(
     }
 
     let mut form = Form::new().text("workspace_id", workspace.workspace_id.to_string());
+    let mut upload_count = 0usize;
+    let mut upload_bytes = 0u64;
+    let mut last_upload_path = String::new();
+    let mut staged: Vec<serde_json::Value> = Vec::new();
     for path in &paths {
         if pending.files[path].action == "delete" {
             continue;
@@ -1240,13 +1564,61 @@ async fn submit_workspace(
         let file = fs::File::open(&local_path)
             .await
             .with_context(|| format!("failed to open {}", local_path.display()))?;
+        let size_bytes = file.metadata().await.map(|metadata| metadata.len()).ok();
+        if let Some(size) = size_bytes {
+            upload_bytes = upload_bytes.saturating_add(size);
+        }
+        upload_count += 1;
+        last_upload_path = path.clone();
+
+        // Large files are staged first so an interrupted transfer resumes rather
+        // than restarting the whole multipart submit.
+        if size_bytes.is_some_and(|size| size >= RESUMABLE_UPLOAD_THRESHOLD) {
+            drop(file);
+            let size = size_bytes.expect("size is present in this branch");
+            if let Some(progress) = progress {
+                progress.emit_detailed(
+                    "uploading",
+                    format!("Staging {path}"),
+                    58,
+                    ProgressDetail::counted(path, upload_count - 1, upload_count, 0, size),
+                );
+            }
+            let staged_upload = stage_upload(
+                client,
+                config,
+                workspace.workspace_id,
+                path,
+                "content",
+                &local_path,
+                size,
+            )
+            .await?;
+            staged.push(serde_json::json!({
+                "path": path,
+                "blob_hash": staged_upload.blob_hash,
+            }));
+            continue;
+        }
+
         let stream = ReaderStream::new(file);
         let part = Part::stream(reqwest::Body::wrap_stream(stream)).file_name(path.clone());
         form = form.part("file", part);
     }
+    if !staged.is_empty() {
+        form = form.text("staged", serde_json::to_string(&staged)?);
+    }
 
     if let Some(progress) = progress {
-        progress.emit("uploading", "Uploading changed asset data", 62);
+        progress.emit_detailed(
+            "uploading",
+            format!(
+                "Uploading {upload_count} {}",
+                if upload_count == 1 { "file" } else { "files" }
+            ),
+            62,
+            ProgressDetail::counted(&last_upload_path, 0, upload_count, 0, upload_bytes),
+        );
     }
     let response = authed_request(
         config,
@@ -1296,6 +1668,316 @@ async fn submit_workspace(
     workspace.active_changelist_id = None;
     save_workspace(&workspace_dir, &workspace).await?;
     Ok(response)
+}
+
+/// Uploads the active changelist's pending content to the server as a shelf.
+///
+/// Unlike submit this creates no revision, runs no validation, and requires no
+/// lock: the point of shelving is to get unfinished work off a single machine,
+/// so refusing work that does not yet validate would defeat it. Local pending
+/// state is left alone, so the artist keeps working from the same files.
+async fn shelve(client: &reqwest::Client, config: &GlobalConfig) -> Result<()> {
+    let shelf = shelve_workspace(client, config).await?;
+    for file in &shelf.files {
+        println!("shelved {}\t{}", file.action, file.path);
+    }
+    println!(
+        "{} file(s) shelved; local files are unchanged",
+        shelf.files.len()
+    );
+    Ok(())
+}
+
+async fn shelve_workspace(
+    client: &reqwest::Client,
+    config: &GlobalConfig,
+) -> Result<ShelfResponse> {
+    let (workspace, workspace_dir) = load_workspace().await?;
+    let _operation_lock = lock_workspace_operation(&workspace_dir)?;
+    let changelist_id = workspace
+        .active_changelist_id
+        .ok_or_else(|| anyhow!("no active changelist; run `oad change create \"description\"`"))?;
+    let pending = load_pending(&workspace_dir).await?;
+
+    let mut paths = pending
+        .files
+        .iter()
+        .filter(|(_, file)| file.action != "delete")
+        .map(|(path, _)| path.clone())
+        .collect::<Vec<_>>();
+    paths.sort();
+    if paths.is_empty() {
+        // A delete has no content, so a changelist of only deletes has nothing
+        // to park. Saying so beats sending an empty request the server rejects.
+        bail!("nothing to shelve; shelving stores file content and deletes have none");
+    }
+
+    let mut form = Form::new();
+    let mut staged: Vec<serde_json::Value> = Vec::new();
+    for path in &paths {
+        let local_path = safe_workspace_target(&workspace.root, path)?;
+        let file = fs::File::open(&local_path)
+            .await
+            .with_context(|| format!("failed to open {}", local_path.display()))?;
+        let size_bytes = file.metadata().await.map(|metadata| metadata.len()).ok();
+        if size_bytes.is_some_and(|size| size >= RESUMABLE_UPLOAD_THRESHOLD) {
+            drop(file);
+            let size = size_bytes.expect("size is present in this branch");
+            let staged_upload = stage_upload(
+                client,
+                config,
+                workspace.workspace_id,
+                path,
+                "content",
+                &local_path,
+                size,
+            )
+            .await?;
+            staged.push(serde_json::json!({
+                "path": path,
+                "blob_hash": staged_upload.blob_hash,
+            }));
+            continue;
+        }
+        let stream = ReaderStream::new(file);
+        let part = Part::stream(reqwest::Body::wrap_stream(stream)).file_name(path.clone());
+        form = form.part("file", part);
+    }
+    if !staged.is_empty() {
+        form = form.text("staged", serde_json::to_string(&staged)?);
+    }
+
+    let response = authed_request(
+        config,
+        client
+            .post(api_url(
+                config,
+                &format!("/api/changelists/{changelist_id}/shelve"),
+            ))
+            .multipart(form),
+    )?
+    .send()
+    .await?;
+    parse_response(response).await
+}
+
+/// Downloads the active changelist's shelf back into the workspace.
+///
+/// Local files are overwritten with the shelved content, because that is what
+/// restoring parked work means. Files whose contents already match are skipped
+/// so a partially completed unshelve can be re-run safely.
+async fn unshelve(client: &reqwest::Client, config: &GlobalConfig) -> Result<()> {
+    let outcome = unshelve_workspace(client, config).await?;
+    for path in &outcome.written {
+        println!("restored\t{path}");
+    }
+    println!(
+        "unshelved {} file(s); {} written locally",
+        outcome.restored_count,
+        outcome.written.len()
+    );
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct UnshelveOutcome {
+    restored_count: usize,
+    /// Paths actually pulled down, excluding those already matching on disk.
+    written: Vec<String>,
+}
+
+async fn unshelve_workspace(
+    client: &reqwest::Client,
+    config: &GlobalConfig,
+) -> Result<UnshelveOutcome> {
+    let (workspace, workspace_dir) = load_workspace().await?;
+    let _operation_lock = lock_workspace_operation(&workspace_dir)?;
+    let changelist_id = workspace.active_changelist_id.ok_or_else(|| {
+        anyhow!("no active changelist; run `oad change create \"description\"` first")
+    })?;
+
+    let shelf: ShelfResponse = authed_post_json(
+        client,
+        config,
+        &format!("/api/changelists/{changelist_id}/unshelve"),
+        &serde_json::json!({}),
+    )
+    .await?;
+
+    let temp_dir = workspace_dir.join("tmp");
+    fs::create_dir_all(&temp_dir).await?;
+    let mut pending = load_pending(&workspace_dir).await?;
+    let mut written = Vec::new();
+    for file in &shelf.files {
+        let target = safe_workspace_target(&workspace.root, &file.path)?;
+        let already_current = target.exists() && hash_file(&target).await? == file.blob_hash;
+        if !already_current {
+            // Skipping identical content means a partially finished unshelve can
+            // be re-run without clobbering files it already restored.
+            download_shelf_file(
+                client,
+                config,
+                changelist_id,
+                &workspace.root,
+                &temp_dir,
+                file,
+            )
+            .await?;
+            written.push(file.path.clone());
+        }
+        pending.files.insert(
+            file.path.clone(),
+            PendingFile {
+                action: file.action.clone(),
+            },
+        );
+    }
+    save_pending(&workspace_dir, &pending).await?;
+    Ok(UnshelveOutcome {
+        restored_count: shelf.files.len(),
+        written,
+    })
+}
+
+/// Fetches one shelved file, resuming a partial transfer when one is present.
+async fn download_shelf_file(
+    client: &reqwest::Client,
+    config: &GlobalConfig,
+    changelist_id: Uuid,
+    workspace_root: &Path,
+    temp_dir: &Path,
+    file: &ShelvedFile,
+) -> Result<()> {
+    let target = safe_workspace_target(workspace_root, &file.path)?;
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).await?;
+    }
+    let partial = temp_dir.join(format!("shelf-{}.partial", file.blob_hash));
+    let expected_size = file.size_bytes.max(0) as u64;
+
+    let mut last_error = None;
+    for attempt in 1..=DOWNLOAD_ATTEMPTS {
+        let mut resume_from = match fs::metadata(&partial).await {
+            Ok(metadata) if metadata.is_file() => metadata.len(),
+            _ => 0,
+        };
+        if resume_from >= expected_size && expected_size > 0 {
+            let _ = fs::remove_file(&partial).await;
+            resume_from = 0;
+        }
+
+        let url = api_url(
+            config,
+            &format!(
+                "/api/shelves/content?changelist_id={changelist_id}&path={}",
+                urlencoding::encode(&file.path)
+            ),
+        );
+        let mut request = authed_request(config, client.get(url))?;
+        if resume_from > 0 {
+            request = request.header(reqwest::header::RANGE, format!("bytes={resume_from}-"));
+        }
+        let result: Result<()> = async {
+            let response = request.send().await?;
+            let resuming = response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+            let mut resume_from = resume_from;
+            if resume_from > 0 && !resuming {
+                let _ = fs::remove_file(&partial).await;
+                resume_from = 0;
+            }
+            let mut response = ensure_success(response).await?;
+
+            let mut hasher = blake3::Hasher::new();
+            if resume_from > 0 {
+                hash_existing_prefix(&partial, &mut hasher).await?;
+            }
+            let mut out = fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(resume_from == 0)
+                .append(resume_from > 0)
+                .open(&partial)
+                .await?;
+            while let Some(chunk) = response.chunk().await? {
+                hasher.update(&chunk);
+                out.write_all(&chunk).await?;
+            }
+            out.flush().await?;
+            out.sync_all().await?;
+            let local_hash = hasher.finalize().to_hex().to_string();
+            if local_hash != file.blob_hash {
+                bail!("integrity check failed for shelved file {}", file.path);
+            }
+            Ok(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                replace_workspace_file(&partial, &target, temp_dir).await?;
+                return Ok(());
+            }
+            Err(error) => {
+                if error.to_string().contains("integrity check failed") {
+                    let _ = fs::remove_file(&partial).await;
+                }
+                if attempt < DOWNLOAD_ATTEMPTS {
+                    eprintln!(
+                        "retrying {} after attempt {attempt} failed: {error}",
+                        file.path
+                    );
+                }
+                last_error = Some(error);
+            }
+        }
+    }
+    Err(last_error.expect("at least one download attempt runs"))
+}
+
+/// Lists every shelf on the workspace's stream, including teammates'.
+async fn shelves(client: &reqwest::Client, config: &GlobalConfig) -> Result<()> {
+    let (workspace, _) = load_workspace().await?;
+    let summaries: Vec<ShelfSummary> = authed_get_json(
+        client,
+        config,
+        &format!("/api/shelves?workspace_id={}", workspace.workspace_id),
+    )
+    .await?;
+    if summaries.is_empty() {
+        println!("no shelved work on this stream");
+        return Ok(());
+    }
+    for shelf in summaries {
+        println!(
+            "{}\t{}\t{} file(s)\t{}\t{}",
+            shelf.changelist_id,
+            shelf.owner,
+            shelf.file_count,
+            format_bytes(shelf.total_bytes.max(0) as u64),
+            shelf.description
+        );
+    }
+    Ok(())
+}
+
+/// Discards the active changelist's shelf without restoring it.
+async fn discard_shelf(client: &reqwest::Client, config: &GlobalConfig) -> Result<()> {
+    let (workspace, _) = load_workspace().await?;
+    let changelist_id = workspace
+        .active_changelist_id
+        .ok_or_else(|| anyhow!("no active changelist, so there is no shelf to discard"))?;
+    let response = authed_request(
+        config,
+        client.delete(api_url(
+            config,
+            &format!("/api/changelists/{changelist_id}/shelve"),
+        )),
+    )?
+    .send()
+    .await?;
+    let discarded: DiscardShelfResponse = parse_response(response).await?;
+    println!("discarded {} shelved file(s)", discarded.discarded);
+    Ok(())
 }
 
 async fn revert(client: &reqwest::Client, config: &GlobalConfig, path: PathBuf) -> Result<()> {
@@ -1548,6 +2230,47 @@ struct IntegrationProgress {
     operation: &'static str,
 }
 
+/// Optional per-file transfer detail carried alongside a progress event.
+///
+/// Every field is omitted from the wire payload when `None` so that consumers
+/// only ever render values the CLI actually knows. Totals stay absent while a
+/// paged sync is still discovering work rather than reporting a guess.
+#[derive(Default)]
+struct ProgressDetail {
+    path: Option<String>,
+    files_completed: Option<usize>,
+    files_total: Option<usize>,
+    bytes_completed: Option<u64>,
+    bytes_total: Option<u64>,
+}
+
+impl ProgressDetail {
+    fn file(path: &str, files_completed: usize, bytes_completed: u64) -> Self {
+        Self {
+            path: Some(path.to_string()),
+            files_completed: Some(files_completed),
+            bytes_completed: Some(bytes_completed),
+            ..Self::default()
+        }
+    }
+
+    fn counted(
+        path: &str,
+        files_completed: usize,
+        files_total: usize,
+        bytes_completed: u64,
+        bytes_total: u64,
+    ) -> Self {
+        Self {
+            path: Some(path.to_string()),
+            files_completed: Some(files_completed),
+            files_total: Some(files_total),
+            bytes_completed: Some(bytes_completed),
+            bytes_total: Some(bytes_total),
+        }
+    }
+}
+
 impl IntegrationProgress {
     fn new(protocol_version: u8, operation: &'static str) -> Self {
         Self {
@@ -1557,10 +2280,20 @@ impl IntegrationProgress {
     }
 
     fn emit(&self, phase: &str, message: impl Into<String>, completed: u8) {
+        self.emit_detailed(phase, message, completed, ProgressDetail::default());
+    }
+
+    fn emit_detailed(
+        &self,
+        phase: &str,
+        message: impl Into<String>,
+        completed: u8,
+        detail: ProgressDetail,
+    ) {
         if self.protocol_version != 2 {
             return;
         }
-        print_protocol_line(serde_json::json!({
+        let mut payload = serde_json::json!({
             "protocol_version": 2,
             "type": "progress",
             "operation": self.operation,
@@ -1568,7 +2301,23 @@ impl IntegrationProgress {
             "message": message.into(),
             "completed": completed,
             "total": 100,
-        }));
+        });
+        if let Some(path) = detail.path {
+            payload["path"] = serde_json::Value::String(path);
+        }
+        if let Some(value) = detail.files_completed {
+            payload["files_completed"] = serde_json::json!(value);
+        }
+        if let Some(value) = detail.files_total {
+            payload["files_total"] = serde_json::json!(value);
+        }
+        if let Some(value) = detail.bytes_completed {
+            payload["bytes_completed"] = serde_json::json!(value);
+        }
+        if let Some(value) = detail.bytes_total {
+            payload["bytes_total"] = serde_json::json!(value);
+        }
+        print_protocol_line(payload);
     }
 }
 
@@ -1576,6 +2325,11 @@ fn integration_command_name(command: &IntegrationCommand) -> &'static str {
     match command {
         IntegrationCommand::Sync => "sync",
         IntegrationCommand::Submit { .. } => "submit",
+        IntegrationCommand::Shelve => "shelve",
+        IntegrationCommand::Unshelve => "unshelve",
+        IntegrationCommand::Shelves => "shelves",
+        IntegrationCommand::Preview { .. } => "preview",
+        IntegrationCommand::ReviewProxy { .. } => "review_proxy",
         IntegrationCommand::Context => "context",
         IntegrationCommand::Pending => "pending",
         IntegrationCommand::Status { .. } => "status",
@@ -1643,6 +2397,31 @@ async fn integration(
             let response = submit_workspace(client, config, Some(&description), progress).await?;
             Ok(serde_json::to_value(response)?)
         }
+        IntegrationCommand::Shelve => Ok(serde_json::to_value(
+            shelve_workspace(client, config).await?,
+        )?),
+        IntegrationCommand::Unshelve => Ok(serde_json::to_value(
+            unshelve_workspace(client, config).await?,
+        )?),
+        IntegrationCommand::Shelves => {
+            let (workspace, _) = load_workspace().await?;
+            let summaries: Vec<ShelfSummary> = authed_get_json(
+                client,
+                config,
+                &format!("/api/shelves?workspace_id={}", workspace.workspace_id),
+            )
+            .await?;
+            Ok(serde_json::json!({ "shelves": summaries }))
+        }
+        IntegrationCommand::Preview { path, image } => {
+            integration_preview(client, config, path, image).await
+        }
+        IntegrationCommand::ReviewProxy {
+            path,
+            media,
+            frame_rate,
+            start_frame,
+        } => integration_review_proxy(client, config, path, media, frame_rate, start_frame).await,
         IntegrationCommand::History { path } => integration_history(client, config, path).await,
         IntegrationCommand::Validate { paths, adapter } => {
             integration_validate(client, config, paths, adapter).await
@@ -2181,6 +2960,173 @@ async fn integration_history(
     Ok(serde_json::json!({ "path": depot_path, "revisions": entries }))
 }
 
+async fn integration_preview(
+    client: &reqwest::Client,
+    config: &GlobalConfig,
+    path: PathBuf,
+    image: PathBuf,
+) -> Result<serde_json::Value> {
+    let (workspace, workspace_dir) = load_workspace().await?;
+    let _operation_lock = lock_workspace_operation(&workspace_dir)?;
+    let depot_path = depot_path_for_input(&workspace.root, &path)?;
+    let state = load_state(&workspace_dir).await?;
+    let revision_number = state
+        .files
+        .get(&depot_path)
+        .map(|file| file.revision_number)
+        .ok_or_else(|| anyhow!("cannot upload a preview before the asset is submitted"))?;
+    let content_type = match image
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        _ => bail!("preview image must be PNG, JPEG, or WebP"),
+    };
+    let bytes = fs::read(&image)
+        .await
+        .with_context(|| format!("failed to read preview image {}", image.display()))?;
+    let url = format!(
+        "/api/files/preview?workspace_id={}&path={}&revision_number={}",
+        workspace.workspace_id,
+        urlencoding::encode(&depot_path),
+        revision_number
+    );
+    let response = authed_request(
+        config,
+        client
+            .post(api_url(config, &url))
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .body(bytes),
+    )?
+    .send()
+    .await?;
+    parse_response(response).await
+}
+
+async fn integration_review_proxy(
+    client: &reqwest::Client,
+    config: &GlobalConfig,
+    path: PathBuf,
+    media: PathBuf,
+    frame_rate: Option<String>,
+    start_frame: Option<i32>,
+) -> Result<serde_json::Value> {
+    let (workspace, workspace_dir) = load_workspace().await?;
+    let _operation_lock = lock_workspace_operation(&workspace_dir)?;
+    let depot_path = depot_path_for_input(&workspace.root, &path)?;
+    let state = load_state(&workspace_dir).await?;
+    let revision_number = state
+        .files
+        .get(&depot_path)
+        .map(|file| file.revision_number)
+        .ok_or_else(|| anyhow!("cannot upload a review proxy before the asset is submitted"))?;
+    let content_type = match media
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "glb" => "model/gltf-binary",
+        "gltf" => "model/gltf+json",
+        "fbx" => "application/vnd.autodesk.fbx",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        _ => bail!("review proxy must be GLB, glTF, FBX, MP4, or WebM"),
+    };
+    let size_bytes = fs::metadata(&media)
+        .await
+        .with_context(|| format!("failed to inspect review proxy {}", media.display()))?
+        .len();
+    if size_bytes == 0 {
+        bail!("review proxy cannot be empty");
+    }
+    let timebase = frame_rate.as_deref().map(parse_frame_rate).transpose()?;
+    if start_frame.is_some_and(|value| value < 0) {
+        bail!("review proxy start frame cannot be negative");
+    }
+    let staged = stage_upload(
+        client,
+        config,
+        workspace.workspace_id,
+        &depot_path,
+        "review_proxy",
+        &media,
+        size_bytes,
+    )
+    .await?;
+    authed_post_json(
+        client,
+        config,
+        "/api/reviews/proxy/attach",
+        &serde_json::json!({
+            "workspace_id": workspace.workspace_id,
+            "path": depot_path,
+            "revision_number": revision_number,
+            "upload_id": staged.upload_id,
+            "content_type": content_type,
+            "frame_rate_numerator": timebase.map(|value| value.0),
+            "frame_rate_denominator": timebase.map(|value| value.1),
+            "start_frame": timebase.map(|_| start_frame.unwrap_or(0)),
+        }),
+    )
+    .await
+}
+
+fn parse_frame_rate(value: &str) -> Result<(i32, i32)> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("frame rate cannot be empty");
+    }
+    let (numerator, denominator) = if let Some((numerator, denominator)) = value.split_once('/') {
+        (
+            numerator.trim().parse::<i64>()?,
+            denominator.trim().parse::<i64>()?,
+        )
+    } else if let Some((whole, fraction)) = value.split_once('.') {
+        if fraction.is_empty() || !fraction.chars().all(|character| character.is_ascii_digit()) {
+            bail!("frame rate must be a number or rational such as 24000/1001");
+        }
+        let scale = 10_i64
+            .checked_pow(fraction.len() as u32)
+            .ok_or_else(|| anyhow!("frame-rate precision is too large"))?;
+        let whole = whole.trim().parse::<i64>()?;
+        let fraction = fraction.parse::<i64>()?;
+        (
+            whole
+                .checked_mul(scale)
+                .and_then(|base| base.checked_add(fraction))
+                .ok_or_else(|| anyhow!("frame rate is too large"))?,
+            scale,
+        )
+    } else {
+        (value.parse::<i64>()?, 1)
+    };
+    if numerator <= 0 || denominator <= 0 {
+        bail!("frame rate must be positive");
+    }
+    let divisor = greatest_common_divisor(numerator, denominator);
+    let numerator =
+        i32::try_from(numerator / divisor).context("frame-rate numerator is too large")?;
+    let denominator =
+        i32::try_from(denominator / divisor).context("frame-rate denominator is too large")?;
+    Ok((numerator, denominator))
+}
+
+fn greatest_common_divisor(mut left: i64, mut right: i64) -> i64 {
+    while right != 0 {
+        let remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    left.abs().max(1)
+}
+
 async fn integration_validate(
     client: &reqwest::Client,
     config: &GlobalConfig,
@@ -2679,6 +3625,41 @@ mod tests {
     }
 
     #[test]
+    fn shelving_commands_parse_without_requiring_a_path() {
+        // Shelving acts on the whole active changelist, never one file, so these
+        // must not grow a positional argument by accident.
+        assert!(matches!(
+            Cli::try_parse_from(["oad", "shelve"]).unwrap().command,
+            Command::Shelve
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["oad", "unshelve"]).unwrap().command,
+            Command::Unshelve
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["oad", "shelves"]).unwrap().command,
+            Command::Shelves { discard: false }
+        ));
+        assert!(matches!(
+            Cli::try_parse_from(["oad", "shelves", "--discard"])
+                .unwrap()
+                .command,
+            Command::Shelves { discard: true }
+        ));
+        assert!(Cli::try_parse_from(["oad", "shelve", "Scenes/shot.blend"]).is_err());
+    }
+
+    #[test]
+    fn format_bytes_scales_units_and_keeps_small_values_exact() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(2048), "2.0 KB");
+        assert_eq!(format_bytes(5 * 1024 * 1024), "5.0 MB");
+        // Clamps at the largest unit rather than overflowing the table.
+        assert_eq!(format_bytes(3 * 1024u64.pow(5)), "3072.0 TB");
+    }
+
+    #[test]
     fn workspace_operation_lock_is_exclusive() {
         let temp = tempfile::tempdir().unwrap();
         let first = lock_workspace_operation(temp.path()).unwrap();
@@ -2707,5 +3688,76 @@ mod tests {
                 command: IntegrationCommand::Sync,
             }
         ));
+    }
+
+    #[test]
+    fn integration_accepts_portable_review_proxy_media() {
+        let cli = Cli::try_parse_from([
+            "oad",
+            "integration",
+            "review-proxy",
+            "Scenes/Shot.blend",
+            "--media",
+            "/tmp/Shot.glb",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Integration {
+                command: IntegrationCommand::ReviewProxy { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn review_proxy_timebase_accepts_fractional_studio_rates() {
+        assert_eq!(parse_frame_rate("24000/1001").unwrap(), (24_000, 1_001));
+        assert_eq!(parse_frame_rate("23.976").unwrap(), (2_997, 125));
+        assert_eq!(parse_frame_rate("24").unwrap(), (24, 1));
+        assert!(parse_frame_rate("0").is_err());
+
+        let cli = Cli::try_parse_from([
+            "oad",
+            "integration",
+            "review-proxy",
+            "Scenes/Shot.blend",
+            "--media",
+            "/tmp/Shot.glb",
+            "--frame-rate",
+            "24000/1001",
+            "--start-frame",
+            "1001",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Integration {
+                command: IntegrationCommand::ReviewProxy {
+                    start_frame: Some(1001),
+                    ..
+                },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn saved_server_is_used_until_an_explicit_override_is_provided() {
+        let saved = Cli::try_parse_from(["oad", "workspace", "list"]).unwrap();
+        assert_eq!(saved.server, None);
+
+        let overridden = Cli::try_parse_from([
+            "oad",
+            "--server",
+            "https://asset.example.com",
+            "workspace",
+            "list",
+        ])
+        .unwrap();
+        assert_eq!(
+            overridden.server.as_deref(),
+            Some("https://asset.example.com")
+        );
     }
 }

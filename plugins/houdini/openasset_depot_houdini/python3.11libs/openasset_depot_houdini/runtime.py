@@ -30,10 +30,19 @@ def selected_hda_path() -> str:
     return definition.libraryFilePath()
 
 
-def client(path: Optional[str] = None) -> Any:
+def client(path: Optional[str] = None, progress_callback: Optional[Callable[[Any], None]] = None) -> Any:
     cli_path = hou.getenv("OAD_CLI") or None
     server_url = hou.getenv("OAD_SERVER_URL") or None
-    return BridgeClient(path or scene_path(), cli_path=cli_path, server_url=server_url)
+    return BridgeClient(
+        path or scene_path(),
+        cli_path=cli_path,
+        server_url=server_url,
+        progress_callback=progress_callback,
+    )
+
+
+def defer(callback: Callable[[], None]) -> None:
+    hdefereval.executeDeferred(callback)
 
 
 def runner():

@@ -25,7 +25,14 @@ def client() -> Any:
         script_path(),
         cli_path=os.environ.get("OAD_CLI") or None,
         server_url=os.environ.get("OAD_SERVER_URL") or None,
+        progress_callback=_progress_from_worker,
     )
+
+
+def _progress_from_worker(progress: Any) -> None:
+    from . import commands
+
+    schedule(lambda progress=progress: commands.set_progress(progress))
 
 
 def schedule(callback: Callable[[], None]) -> None:

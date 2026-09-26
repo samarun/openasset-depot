@@ -12,6 +12,10 @@ services:
       OAD_CHUNK_SIZE_BYTES: ${OAD_CHUNK_SIZE_BYTES:-4194304}
       OAD_REQUEST_TIMEOUT_SECONDS: ${OAD_REQUEST_TIMEOUT_SECONDS:-1800}
       OAD_CORS_ALLOWED_ORIGINS: ${OAD_CORS_ALLOWED_ORIGINS:-http://127.0.0.1:5173,http://localhost:5173,tauri://localhost,http://tauri.localhost}
+      OAD_ALLOW_SIGNUPS: ${OAD_ALLOW_SIGNUPS:-false}
+      # Scheduled integrity sweeps are opt-in. Enable on exactly one replica.
+      OAD_INTEGRITY_INTERVAL_SECONDS: ${OAD_INTEGRITY_INTERVAL_SECONDS:-0}
+      OAD_INTEGRITY_SAMPLE_SIZE: ${OAD_INTEGRITY_SAMPLE_SIZE:-250}
     depends_on:
       postgres:
         condition: service_healthy
@@ -45,9 +49,12 @@ services:
       retries: 20
     restart: unless-stopped
 
+  # S3-compatible object storage. Bring up with `--profile s3`, and point the
+  # API at it by setting OAD_STORAGE_BACKEND=s3 plus the OAD_S3_* variables.
+  # The API image must be built with the `s3` cargo feature.
   minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
-    profiles: ["s3-future"]
+    profiles: ["s3"]
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-openasset}
@@ -57,20 +64,50 @@ services:
       - "${OAD_MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - openasset_minio:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     restart: unless-stopped
+
+  # Creates the depot bucket once, then exits. The API refuses to start against
+  # a missing bucket, so this must succeed before the API comes up.
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    profiles: ["s3"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-openasset}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      OAD_S3_BUCKET: ${OAD_S3_BUCKET:-openasset-objects}
+    entrypoint: >-
+      /bin/sh -c "
+      mc alias set depot http://minio:9000 \"$$MINIO_ROOT_USER\" \"$$MINIO_ROOT_PASSWORD\" &&
+      mc mb --ignore-existing \"depot/$$OAD_S3_BUCKET\" &&
+      mc version enable \"depot/$$OAD_S3_BUCKET\"
+      "
+    restart: "no"
 
   redis:
     image: redis:7
     profiles: ["future"]
     restart: unless-stopped
 
+  # Dedicated maintenance replica running only the scheduled integrity and
+  # orphan-cleanup sweeps. Bring up with `--profile maintenance` and leave
+  # OAD_INTEGRITY_INTERVAL_SECONDS at 0 on the API service so sweeps run in
+  # exactly one place. It shares the object volume and binds a distinct port,
+  # since it still serves /health for container orchestration.
   openasset-worker:
     build:
       context: ..
       dockerfile: server/api/Dockerfile
-    profiles: ["future"]
+    profiles: ["maintenance"]
     environment:
-      OAD_BIND_ADDR: ${OAD_BIND_ADDR:-0.0.0.0:8080}
+      OAD_BIND_ADDR: 0.0.0.0:8080
       OAD_DATABASE_URL: ${OAD_DATABASE_URL:?set OAD_DATABASE_URL}
       OAD_JWT_SECRET: ${OAD_JWT_SECRET:?set OAD_JWT_SECRET}
       OAD_STORAGE_ROOT: ${OAD_STORAGE_ROOT:-/var/lib/openasset/objects}
@@ -78,8 +115,16 @@ services:
       OAD_CHUNK_SIZE_BYTES: ${OAD_CHUNK_SIZE_BYTES:-4194304}
       OAD_REQUEST_TIMEOUT_SECONDS: ${OAD_REQUEST_TIMEOUT_SECONDS:-1800}
       OAD_CORS_ALLOWED_ORIGINS: ${OAD_CORS_ALLOWED_ORIGINS:-http://127.0.0.1:5173,http://localhost:5173,tauri://localhost,http://tauri.localhost}
-    command: ["openasset-api"]
-    restart: "no"
+      # Only the API service runs migrations.
+      OAD_RUN_MIGRATIONS: "false"
+      OAD_INTEGRITY_INTERVAL_SECONDS: ${OAD_INTEGRITY_INTERVAL_SECONDS:-21600}
+      OAD_INTEGRITY_SAMPLE_SIZE: ${OAD_INTEGRITY_SAMPLE_SIZE:-250}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - openasset_objects:/var/lib/openasset/objects
+    restart: unless-stopped
 
   openasset-web:
     build:

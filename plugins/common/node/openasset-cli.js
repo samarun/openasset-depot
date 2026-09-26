@@ -3,7 +3,7 @@
 const { execFile } = require('child_process');
 const path = require('path');
 
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 120000;
 const LONG_OPERATION_TIMEOUT_MS = 30 * 60 * 1000;
@@ -19,6 +19,8 @@ const COMMANDS = new Set([
   'revert',
   'sync',
   'submit',
+  'shelve',
+  'unshelve',
   'history',
   'validate',
 ]);
@@ -59,7 +61,8 @@ function buildArguments(command, options) {
     throw new OpenAssetCliError(`unsupported integration command: ${command}`, 'invalid_command');
   }
   const input = options || {};
-  const args = ['integration', command];
+  // The CLI still defaults to protocol 1, so the version has to be requested.
+  const args = ['integration', '--protocol-version', String(PROTOCOL_VERSION), command];
   const paths = Array.isArray(input.paths) ? input.paths : input.path ? [input.path] : [];
   if (SINGLE_PATH_COMMANDS.has(command) && paths.length !== 1) {
     throw new OpenAssetCliError(`${command} requires exactly one file path`, 'invalid_input');
@@ -91,15 +94,38 @@ function buildArguments(command, options) {
   return args;
 }
 
+/**
+ * Reads the protocol 2 stream, which is one JSON object per line: any number of
+ * `progress` lines followed by exactly one `result` line.
+ *
+ * These panels run the CLI through `execFile`, which buffers stdout and hands it
+ * over once the process exits, so there is no live progress to report and the
+ * progress lines are only skipped. A host that wants a progress bar has to spawn
+ * the CLI itself, the way `openasset_depot_bridge.client` does.
+ */
 function parseEnvelope(stdout) {
-  let envelope;
-  try {
-    envelope = JSON.parse(stdout);
-  } catch (error) {
-    throw new OpenAssetCliError('oad returned invalid JSON', 'invalid_response', error.message);
+  const lines = String(stdout).split('\n').map((line) => line.trim()).filter(Boolean);
+  let envelope = null;
+  for (const line of lines) {
+    let payload;
+    try {
+      payload = JSON.parse(line);
+    } catch (error) {
+      throw new OpenAssetCliError('oad returned invalid JSON', 'invalid_response', error.message);
+    }
+    if (!payload || payload.protocol_version !== PROTOCOL_VERSION) {
+      throw new OpenAssetCliError('oad returned an unsupported integration response', 'protocol_mismatch');
+    }
+    if (payload.type === 'progress') {
+      continue;
+    }
+    if (payload.type !== 'result' || typeof payload.ok !== 'boolean') {
+      throw new OpenAssetCliError('oad returned an unsupported integration response', 'protocol_mismatch');
+    }
+    envelope = payload;
   }
-  if (!envelope || envelope.protocol_version !== PROTOCOL_VERSION || typeof envelope.ok !== 'boolean') {
-    throw new OpenAssetCliError('oad returned an unsupported integration response', 'protocol_mismatch');
+  if (!envelope) {
+    throw new OpenAssetCliError('oad returned no integration result', 'invalid_response');
   }
   if (!envelope.ok) {
     throw new OpenAssetCliError(envelope.error || 'oad command failed', 'command_failed');
@@ -117,7 +143,7 @@ class OpenAssetCli {
 
   run(command, options) {
     const args = ['--cwd', this.settings.workspaceRoot, ...buildArguments(command, options)];
-    const timeoutMs = command === 'sync' || command === 'submit'
+    const timeoutMs = ['sync', 'submit', 'shelve', 'unshelve'].includes(command)
       ? Math.max(this.timeoutMs, LONG_OPERATION_TIMEOUT_MS)
       : this.timeoutMs;
     return new Promise((resolve, reject) => {

@@ -61,6 +61,7 @@ oad --cwd /path/to/project integration delete Textures/Old.psd
 oad --cwd /path/to/project integration sync
 oad --cwd /path/to/project integration validate Scenes/Shot.blend --adapter blender
 oad --cwd /path/to/project integration submit --description "Lighting pass"
+oad --cwd /path/to/project integration preview Scenes/Shot.blend --image /tmp/Shot.png
 ```
 
 Every integration command prints one JSON envelope with

@@ -5,7 +5,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:;" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenAsset Depot</title>
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="lib/panel.css" />
 </head>
 <body>
   <main>
@@ -26,9 +26,10 @@
       <button id="checkout" class="primary">Check Out</button><button id="add">Add to Depot</button>
       <button id="sync">Sync Latest</button><button id="validate">Validate</button>
       <button id="revert">Revert Intent</button>
+      <button id="shelve">Shelve Changes</button><button id="unshelve">Restore Shelf</button>
     </section>
     <section class="submit">
-      <label>Submit note<textarea id="description" rows="3" placeholder="What changed in this editorial pass?"></textarea></label>
+      <label>Description<textarea id="description" rows="3" placeholder="What changed in this editorial pass?"></textarea></label>
       <button id="submit" class="primary">Submit Changes</button>
     </section>
     <footer><button id="settings-link" class="link">Workspace Settings</button><span id="message">Ready</span></footer>
