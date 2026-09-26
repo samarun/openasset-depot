@@ -158,7 +158,11 @@ def generate_scene_preview() -> tuple[Path | None, str | None]:
         "color_mode": image_settings.color_mode,
     }
     try:
-        render.engine = "BLENDER_EEVEE"
+        render.engine = (
+            "BLENDER_EEVEE_NEXT"
+            if (4, 2, 0) <= bpy.app.version < (5, 0, 0)
+            else "BLENDER_EEVEE"
+        )
         render.filepath = str(preview_path)
         render.resolution_x = 640
         render.resolution_y = 360
