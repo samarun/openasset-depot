@@ -1,7 +1,13 @@
+mod backend;
+mod local;
+#[cfg(feature = "s3")]
+mod s3;
+
 use std::{
     path::{Path, PathBuf},
     pin::Pin,
-    time::{Duration, SystemTime},
+    sync::Arc,
+    time::Duration,
 };
 
 use async_stream::try_stream;
@@ -11,11 +17,19 @@ use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 use tokio::{
     fs,
-    io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
 };
 use uuid::Uuid;
 
+pub use backend::{ChunkBackend, ChunkReader};
+pub use local::LocalChunkBackend;
+#[cfg(feature = "s3")]
+pub use s3::S3ChunkBackend;
+
 use crate::error::{AppError, AppResult};
+
+/// Buffer used when copying chunk bytes; independent of the configured chunk size.
+const COPY_BUFFER_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChunkRef {
@@ -41,43 +55,90 @@ pub struct BlobIntegrityReport {
     pub message: Option<String>,
 }
 
+/// Content-addressed blob storage over a pluggable [`ChunkBackend`].
+///
+/// This type owns everything that must behave identically regardless of where
+/// bytes live: fixed-size chunking, BLAKE3 hashing, deduplication, manifest
+/// assembly, range reads, and integrity verification. The backend only sees
+/// immutable objects named by hash.
 #[derive(Debug, Clone)]
-pub struct LocalObjectStore {
-    root: PathBuf,
+pub struct ObjectStore {
+    backend: Arc<dyn ChunkBackend>,
     chunk_size: usize,
+    /// Present only for the local backend, where callers still need real paths
+    /// (staging uploads, admin tooling, tests).
+    local: Option<LocalChunkBackend>,
 }
 
-impl LocalObjectStore {
+/// Retained name for the default deployment, which stores objects on disk.
+pub type LocalObjectStore = ObjectStore;
+
+impl ObjectStore {
+    /// Builds a store backed by the local filesystem.
     pub async fn new(root: PathBuf, chunk_size: usize) -> AppResult<Self> {
+        let local = LocalChunkBackend::new(root).await?;
+        let store = Self::with_backend(Arc::new(local.clone()), chunk_size)?;
+        store
+            .cleanup_stale_uploads(Duration::from_secs(24 * 60 * 60))
+            .await?;
+        Ok(Self {
+            local: Some(local),
+            ..store
+        })
+    }
+
+    pub fn with_backend(backend: Arc<dyn ChunkBackend>, chunk_size: usize) -> AppResult<Self> {
         if chunk_size == 0 {
             return Err(AppError::configuration(
                 "chunk size must be greater than zero",
             ));
         }
-        let store = Self { root, chunk_size };
-        fs::create_dir_all(store.chunks_root()).await?;
-        fs::create_dir_all(store.blobs_root()).await?;
-        fs::create_dir_all(store.tmp_root()).await?;
-        store
-            .cleanup_stale_uploads(Duration::from_secs(24 * 60 * 60))
-            .await?;
-        Ok(store)
+        Ok(Self {
+            backend,
+            chunk_size,
+            local: None,
+        })
     }
 
+    pub fn describe(&self) -> String {
+        self.backend.describe()
+    }
+
+    /// Filesystem root, when this store is backed by the local filesystem.
+    pub fn local_root(&self) -> Option<&Path> {
+        self.local.as_ref().map(LocalChunkBackend::root)
+    }
+
+    /// Panics for non-local backends; used by call sites that already require
+    /// the default deployment.
     pub fn root(&self) -> &Path {
-        &self.root
+        self.local_root()
+            .expect("root() is only available for the local object store backend")
     }
 
     pub fn chunk_files_root(&self) -> PathBuf {
-        self.chunks_root()
+        self.local
+            .as_ref()
+            .map(LocalChunkBackend::chunks_root)
+            .unwrap_or_default()
     }
 
     pub fn blob_manifests_root(&self) -> PathBuf {
-        self.blobs_root()
+        self.local
+            .as_ref()
+            .map(LocalChunkBackend::blobs_root)
+            .unwrap_or_default()
     }
 
     pub fn temp_upload_path(&self, upload_id: Uuid) -> PathBuf {
-        self.tmp_root().join(format!("{upload_id}.upload"))
+        self.local
+            .as_ref()
+            .map(|local| local.temp_upload_path(upload_id))
+            .unwrap_or_else(|| std::env::temp_dir().join(format!("{upload_id}.upload")))
+    }
+
+    pub async fn cleanup_stale_uploads(&self, max_age: Duration) -> AppResult<usize> {
+        self.backend.cleanup_stale_uploads(max_age).await
     }
 
     pub async fn put_file(&self, path: &Path) -> AppResult<BlobManifest> {
@@ -85,23 +146,8 @@ impl LocalObjectStore {
         self.put_reader(file).await
     }
 
-    pub async fn cleanup_stale_uploads(&self, max_age: Duration) -> AppResult<usize> {
-        let cutoff = SystemTime::now()
-            .checked_sub(max_age)
-            .unwrap_or(SystemTime::UNIX_EPOCH);
-        let mut removed = 0usize;
-        let mut entries = fs::read_dir(self.tmp_root()).await?;
-        while let Some(entry) = entries.next_entry().await? {
-            let metadata = entry.metadata().await?;
-            if metadata.is_file() && metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH) <= cutoff
-            {
-                fs::remove_file(entry.path()).await?;
-                removed += 1;
-            }
-        }
-        Ok(removed)
-    }
-
+    /// Chunks `reader`, stores any chunks the backend does not already hold,
+    /// and publishes the resulting manifest.
     pub async fn put_reader<R>(&self, mut reader: R) -> AppResult<BlobManifest>
     where
         R: AsyncRead + Unpin,
@@ -128,7 +174,9 @@ impl LocalObjectStore {
             file_hasher.update(bytes);
             total_size += filled as u64;
             let chunk_hash = blake3::hash(bytes).to_hex().to_string();
-            self.write_chunk_if_missing(&chunk_hash, bytes).await?;
+            if !self.backend.chunk_exists(&chunk_hash).await? {
+                self.backend.put_chunk(&chunk_hash, bytes).await?;
+            }
             chunks.push(ChunkRef {
                 hash: chunk_hash,
                 size_bytes: filled as u64,
@@ -141,14 +189,15 @@ impl LocalObjectStore {
             size_bytes: total_size,
             chunks,
         };
-        self.write_blob_manifest_if_missing(&manifest).await?;
+        if !self.backend.manifest_exists(&hash).await? {
+            self.backend.put_manifest(&manifest).await?;
+        }
         Ok(manifest)
     }
 
     pub async fn read_manifest(&self, blob_hash: &str) -> AppResult<BlobManifest> {
-        let path = self.blob_path(blob_hash);
-        let data = fs::read(path).await?;
-        Ok(serde_json::from_slice(&data)?)
+        local::validate_hash(blob_hash)?;
+        self.backend.read_manifest(blob_hash).await
     }
 
     pub fn stream_blob(
@@ -158,11 +207,15 @@ impl LocalObjectStore {
         let store = self.clone();
         Box::pin(try_stream! {
             let manifest = store.read_manifest(&blob_hash).await.map_err(std::io::Error::other)?;
-            let mut buffer = vec![0u8; 64 * 1024];
+            let mut buffer = vec![0u8; COPY_BUFFER_BYTES];
             for chunk in manifest.chunks {
-                let mut file = fs::File::open(store.chunk_path(&chunk.hash)).await?;
+                let mut reader = store
+                    .backend
+                    .open_chunk(&chunk.hash)
+                    .await
+                    .map_err(std::io::Error::other)?;
                 loop {
-                    let read = file.read(&mut buffer).await?;
+                    let read = reader.read(&mut buffer).await?;
                     if read == 0 {
                         break;
                     }
@@ -172,6 +225,10 @@ impl LocalObjectStore {
         })
     }
 
+    /// Streams the inclusive byte range `[start, end_inclusive]` of a blob.
+    ///
+    /// Chunks entirely before the range are skipped without being fetched,
+    /// which is what makes ranged and resumed downloads cheap on any backend.
     pub fn stream_blob_range(
         &self,
         blob_hash: String,
@@ -183,7 +240,7 @@ impl LocalObjectStore {
             let manifest = store.read_manifest(&blob_hash).await.map_err(std::io::Error::other)?;
             let mut chunk_start = 0u64;
             let mut remaining = end_inclusive.saturating_sub(start).saturating_add(1);
-            let mut buffer = vec![0u8; 64 * 1024];
+            let mut buffer = vec![0u8; COPY_BUFFER_BYTES];
             for chunk in manifest.chunks {
                 if remaining == 0 {
                     break;
@@ -197,16 +254,20 @@ impl LocalObjectStore {
                     break;
                 }
                 let offset = start.saturating_sub(chunk_start);
-                let mut file = fs::File::open(store.chunk_path(&chunk.hash)).await?;
+                let mut reader = store
+                    .backend
+                    .open_chunk(&chunk.hash)
+                    .await
+                    .map_err(std::io::Error::other)?;
                 if offset > 0 {
-                    file.seek(std::io::SeekFrom::Start(offset)).await?;
+                    skip_exact(&mut reader, offset).await?;
                 }
                 loop {
                     if remaining == 0 {
                         break;
                     }
                     let read_limit = buffer.len().min(remaining as usize);
-                    let read = file.read(&mut buffer[..read_limit]).await?;
+                    let read = reader.read(&mut buffer[..read_limit]).await?;
                     if read == 0 {
                         break;
                     }
@@ -225,11 +286,11 @@ impl LocalObjectStore {
         let manifest = self.read_manifest(blob_hash).await?;
         let tmp_path = target.with_extension("oadtmp");
         let mut out = fs::File::create(&tmp_path).await?;
-        let mut buffer = vec![0u8; 64 * 1024];
+        let mut buffer = vec![0u8; COPY_BUFFER_BYTES];
         for chunk in manifest.chunks {
-            let mut file = fs::File::open(self.chunk_path(&chunk.hash)).await?;
+            let mut reader = self.backend.open_chunk(&chunk.hash).await?;
             loop {
-                let read = file.read(&mut buffer).await?;
+                let read = reader.read(&mut buffer).await?;
                 if read == 0 {
                     break;
                 }
@@ -241,6 +302,11 @@ impl LocalObjectStore {
         Ok(())
     }
 
+    /// Re-reads and re-hashes every chunk of a blob.
+    ///
+    /// Never returns an error: a failed verification is a result, not an
+    /// exception, so a scheduled sweep can report on a corrupt blob and carry
+    /// on to the next one.
     pub async fn verify_blob(&self, blob_hash: &str) -> BlobIntegrityReport {
         let manifest = match self.read_manifest(blob_hash).await {
             Ok(manifest) => manifest,
@@ -265,19 +331,19 @@ impl LocalObjectStore {
 
         let mut blob_hasher = Hasher::new();
         let mut total_size = 0u64;
-        let mut buffer = vec![0u8; 64 * 1024];
+        let mut buffer = vec![0u8; COPY_BUFFER_BYTES];
         for chunk in &manifest.chunks {
             let mut chunk_hasher = Hasher::new();
             let mut chunk_size = 0u64;
-            let mut file = match fs::File::open(self.chunk_path(&chunk.hash)).await {
-                Ok(file) => file,
+            let mut reader = match self.backend.open_chunk(&chunk.hash).await {
+                Ok(reader) => reader,
                 Err(_) => {
                     missing_chunks.push(chunk.hash.clone());
                     continue;
                 }
             };
             loop {
-                let read = match file.read(&mut buffer).await {
+                let read = match reader.read(&mut buffer).await {
                     Ok(0) => break,
                     Ok(read) => read,
                     Err(error) => {
@@ -317,91 +383,66 @@ impl LocalObjectStore {
         }
     }
 
-    fn chunks_root(&self) -> PathBuf {
-        self.root.join("chunks")
-    }
-
-    fn blobs_root(&self) -> PathBuf {
-        self.root.join("blobs")
-    }
-
-    fn tmp_root(&self) -> PathBuf {
-        self.root.join("uploads").join("tmp")
-    }
-
+    #[cfg(test)]
     fn chunk_path(&self, hash: &str) -> PathBuf {
-        shard_path(self.chunks_root(), hash)
-    }
-
-    fn blob_path(&self, hash: &str) -> PathBuf {
-        shard_path(self.blobs_root(), &format!("{hash}.json"))
-    }
-
-    async fn write_chunk_if_missing(&self, hash: &str, bytes: &[u8]) -> AppResult<()> {
-        let final_path = self.chunk_path(hash);
-        if fs::try_exists(&final_path).await? {
-            return Ok(());
-        }
-        if let Some(parent) = final_path.parent() {
-            fs::create_dir_all(parent).await?;
-        }
-        let tmp_path = self.tmp_root().join(format!("{}.chunk", Uuid::new_v4()));
-        let mut file = fs::File::create(&tmp_path).await?;
-        file.write_all(bytes).await?;
-        file.flush().await?;
-        match fs::rename(&tmp_path, &final_path).await {
-            Ok(()) => Ok(()),
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                let _ = fs::remove_file(&tmp_path).await;
-                Ok(())
-            }
-            Err(err) => Err(err.into()),
-        }
-    }
-
-    async fn write_blob_manifest_if_missing(&self, manifest: &BlobManifest) -> AppResult<()> {
-        let final_path = self.blob_path(&manifest.hash);
-        if fs::try_exists(&final_path).await? {
-            return Ok(());
-        }
-        if let Some(parent) = final_path.parent() {
-            fs::create_dir_all(parent).await?;
-        }
-        let tmp_path = self.tmp_root().join(format!("{}.blob", Uuid::new_v4()));
-        let data = serde_json::to_vec_pretty(manifest)?;
-        let mut file = fs::File::create(&tmp_path).await?;
-        file.write_all(&data).await?;
-        file.flush().await?;
-        match fs::rename(&tmp_path, &final_path).await {
-            Ok(()) => Ok(()),
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                let _ = fs::remove_file(&tmp_path).await;
-                Ok(())
-            }
-            Err(err) => Err(err.into()),
-        }
+        self.local
+            .as_ref()
+            .expect("chunk_path requires the local backend")
+            .chunk_path(hash)
     }
 }
 
-fn shard_path(root: PathBuf, name: &str) -> PathBuf {
-    let hash = name.trim_end_matches(".json");
-    let first = &hash[0..2];
-    let second = &hash[2..4];
-    root.join(first).join(second).join(name)
+/// Discards exactly `count` bytes from a reader that may not support seeking.
+async fn skip_exact<R: AsyncRead + Unpin>(reader: &mut R, count: u64) -> std::io::Result<()> {
+    let mut remaining = count;
+    let mut scratch = vec![0u8; COPY_BUFFER_BYTES.min(count.max(1) as usize)];
+    while remaining > 0 {
+        let limit = scratch.len().min(remaining as usize);
+        let read = reader.read(&mut scratch[..limit]).await?;
+        if read == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "chunk ended before the requested range offset",
+            ));
+        }
+        remaining -= read as u64;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use std::{io::Cursor, time::Duration};
 
+    use futures_core::Stream;
     use uuid::Uuid;
 
-    use super::LocalObjectStore;
+    use super::ObjectStore;
+
+    async fn collect_stream(
+        mut stream: std::pin::Pin<
+            Box<dyn Stream<Item = Result<bytes::Bytes, std::io::Error>> + Send>,
+        >,
+    ) -> Vec<u8> {
+        use std::task::{Context, Poll};
+
+        let mut out = Vec::new();
+        std::future::poll_fn(|cx: &mut Context<'_>| loop {
+            match stream.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(bytes))) => out.extend_from_slice(&bytes),
+                Poll::Ready(Some(Err(error))) => panic!("stream failed: {error}"),
+                Poll::Ready(None) => return Poll::Ready(()),
+                Poll::Pending => return Poll::Pending,
+            }
+        })
+        .await;
+        out
+    }
 
     #[tokio::test]
     async fn stores_and_restores_chunked_blob() {
         let dir = tempfile::tempdir().unwrap();
-        let store = LocalObjectStore::new(dir.path().join("objects"), 4)
+        let store = ObjectStore::new(dir.path().join("objects"), 4)
             .await
             .unwrap();
         let manifest = store
@@ -423,7 +464,7 @@ mod tests {
     #[tokio::test]
     async fn deduplicates_identical_content() {
         let dir = tempfile::tempdir().unwrap();
-        let store = LocalObjectStore::new(dir.path().join("objects"), 4)
+        let store = ObjectStore::new(dir.path().join("objects"), 4)
             .await
             .unwrap();
         let first = store
@@ -441,7 +482,7 @@ mod tests {
     async fn streams_large_content_across_bounded_chunks() {
         let dir = tempfile::tempdir().unwrap();
         let chunk_size = 128 * 1024;
-        let store = LocalObjectStore::new(dir.path().join("objects"), chunk_size)
+        let store = ObjectStore::new(dir.path().join("objects"), chunk_size)
             .await
             .unwrap();
         let data = vec![42u8; chunk_size * 3 + 17];
@@ -453,9 +494,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn streams_a_byte_range_that_starts_mid_chunk() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ObjectStore::new(dir.path().join("objects"), 4)
+            .await
+            .unwrap();
+        let manifest = store
+            .put_reader(Cursor::new(b"abcdefghijkl".to_vec()))
+            .await
+            .unwrap();
+
+        let ranged = collect_stream(store.stream_blob_range(manifest.hash.clone(), 5, 9)).await;
+        assert_eq!(ranged, b"fghij");
+
+        let whole = collect_stream(store.stream_blob(manifest.hash)).await;
+        assert_eq!(whole, b"abcdefghijkl");
+    }
+
+    #[tokio::test]
     async fn verifies_blob_integrity_and_detects_corruption() {
         let dir = tempfile::tempdir().unwrap();
-        let store = LocalObjectStore::new(dir.path().join("objects"), 4)
+        let store = ObjectStore::new(dir.path().join("objects"), 4)
             .await
             .unwrap();
         let manifest = store
@@ -477,7 +536,7 @@ mod tests {
     #[tokio::test]
     async fn cleans_stale_upload_temporaries() {
         let dir = tempfile::tempdir().unwrap();
-        let store = LocalObjectStore::new(dir.path().join("objects"), 4)
+        let store = ObjectStore::new(dir.path().join("objects"), 4)
             .await
             .unwrap();
         let temporary = store.temp_upload_path(Uuid::new_v4());

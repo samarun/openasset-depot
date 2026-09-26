@@ -15,6 +15,7 @@ describe("Sidebar", () => {
     );
 
     expect(screen.queryByRole("button", { name: "Admin" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reviews" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
     expect(onNavigate).toHaveBeenCalledWith("settings");
   });
@@ -30,5 +31,7 @@ describe("Sidebar", () => {
     );
 
     expect(screen.getByRole("button", { name: "Admin" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reviews" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Shelves" })).toBeInTheDocument();
   });
 });

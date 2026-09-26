@@ -9,15 +9,17 @@ from pathlib import Path
 import bpy
 
 from . import runtime
-from .bridge_loader import load_bridge
+from .bridge_loader import load_bridge, load_words
 
 
 _, BridgeError, _ = load_bridge()
+_words = load_words()
+ACTIONS = _words.ACTIONS
 
 
 class OPENASSET_OT_open_desktop(bpy.types.Operator):
     bl_idname = "openasset.open_desktop"
-    bl_label = "Open OpenAsset Depot Desktop"
+    bl_label = f"Open {_words.PRODUCT_NAME} Desktop"
     bl_description = "Open the desktop app so you can renew the shared plug-in session"
 
     def execute(self, _context):
@@ -57,7 +59,7 @@ class OPENASSET_OT_open_desktop(bpy.types.Operator):
 
 class OPENASSET_OT_refresh(bpy.types.Operator):
     bl_idname = "openasset.refresh"
-    bl_label = "Refresh OpenAsset Status"
+    bl_label = ACTIONS["refresh"]
     bl_description = "Refresh checkout, sync, and local change status for this scene"
 
     def execute(self, _context):
@@ -67,7 +69,7 @@ class OPENASSET_OT_refresh(bpy.types.Operator):
             runtime.run_operation(
                 lambda: bridge.status([path]),
                 success=lambda values: _status_message(values[0]),
-                label="Refreshing status",
+                label=_words.progress_for("refresh"),
             )
         except BridgeError as error:
             self.report({"ERROR"}, str(error))
@@ -77,7 +79,7 @@ class OPENASSET_OT_refresh(bpy.types.Operator):
 
 class OPENASSET_OT_checkout(bpy.types.Operator):
     bl_idname = "openasset.checkout"
-    bl_label = "Check Out Scene"
+    bl_label = _words.qualified("checkout", "Scene")
     bl_description = "Lock the current scene and add it to the active changelist"
 
     def execute(self, _context):
@@ -87,7 +89,7 @@ class OPENASSET_OT_checkout(bpy.types.Operator):
             runtime.run_operation(
                 lambda: bridge.checkout(path, "Editing in Blender"),
                 success=lambda result: f"Checked out {result['path']}",
-                label="Checking out scene",
+                label=_words.progress_for("checkout"),
             )
         except BridgeError as error:
             self.report({"ERROR"}, str(error))
@@ -97,7 +99,7 @@ class OPENASSET_OT_checkout(bpy.types.Operator):
 
 class OPENASSET_OT_add(bpy.types.Operator):
     bl_idname = "openasset.add"
-    bl_label = "Add Current Scene"
+    bl_label = ACTIONS["add"]
     bl_description = "Mark this new Blender scene for its first submission"
 
     def execute(self, _context):
@@ -107,7 +109,7 @@ class OPENASSET_OT_add(bpy.types.Operator):
             runtime.run_operation(
                 lambda: bridge.add(path),
                 success=lambda result: f"Added {result['path']} to pending changes",
-                label="Adding scene",
+                label=_words.progress_for("add"),
             )
         except BridgeError as error:
             self.report({"ERROR"}, str(error))
@@ -117,7 +119,7 @@ class OPENASSET_OT_add(bpy.types.Operator):
 
 class OPENASSET_OT_sync(bpy.types.Operator):
     bl_idname = "openasset.sync"
-    bl_label = "Sync Latest"
+    bl_label = ACTIONS["sync"]
     bl_description = "Download newer workspace files without overwriting local work"
 
     def execute(self, _context):
@@ -126,7 +128,7 @@ class OPENASSET_OT_sync(bpy.types.Operator):
             runtime.run_operation(
                 bridge.sync,
                 success=lambda result: f"Synced {result.get('synced_count', 0)} file(s)",
-                label="Syncing latest files",
+                label=_words.progress_for("sync"),
             )
         except BridgeError as error:
             self.report({"ERROR"}, str(error))
@@ -136,7 +138,7 @@ class OPENASSET_OT_sync(bpy.types.Operator):
 
 class OPENASSET_OT_validate(bpy.types.Operator):
     bl_idname = "openasset.validate"
-    bl_label = "Validate Scene"
+    bl_label = ACTIONS["validate"]
 
     def execute(self, _context):
         try:
@@ -145,7 +147,7 @@ class OPENASSET_OT_validate(bpy.types.Operator):
             runtime.run_operation(
                 lambda: bridge.validate([path], "Blender"),
                 success=_validation_message,
-                label="Validating scene",
+                label=_words.progress_for("validate"),
             )
         except BridgeError as error:
             self.report({"ERROR"}, str(error))
@@ -155,13 +157,13 @@ class OPENASSET_OT_validate(bpy.types.Operator):
 
 class OPENASSET_OT_submit(bpy.types.Operator):
     bl_idname = "openasset.submit"
-    bl_label = "Submit Changes"
+    bl_label = ACTIONS["submit"]
     bl_description = "Submit all pending files in this workspace"
 
     def execute(self, context):
         description = context.window_manager.openasset_depot.submit_description.strip()
         if not description:
-            self.report({"ERROR"}, "Enter a submit description.")
+            self.report({"ERROR"}, _words.MESSAGES["need_description"])
             return {"CANCELLED"}
         try:
             path = runtime.scene_path()
@@ -175,13 +177,9 @@ class OPENASSET_OT_submit(bpy.types.Operator):
                     statuses = bridge.status([path])
                     status = statuses[0] if statuses else None
                     if status and status.needs_sync:
-                        raise BridgeError(
-                            "A newer depot revision exists. Sync Latest before submitting this scene."
-                        )
+                        raise BridgeError(_words.MESSAGES["needs_sync_first"])
                     if status and status.lock_state == "other":
-                        raise BridgeError(
-                            "Another artist has this scene checked out. Ask them to submit or unlock it, then try again."
-                        )
+                        raise BridgeError(_words.MESSAGES["locked_by_other"])
                     if status and status.local_state == "untracked":
                         bridge.add(path)
                     elif status and status.local_state == "modified" and not status.pending_action:
@@ -229,7 +227,46 @@ class OPENASSET_OT_submit(bpy.types.Operator):
             runtime.run_operation(
                 submit_scene,
                 success=_submit_message,
-                label="Submitting changes",
+                label=_words.progress_for("submit"),
+            )
+        except BridgeError as error:
+            self.report({"ERROR"}, str(error))
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+class OPENASSET_OT_shelve(bpy.types.Operator):
+    bl_idname = "openasset.shelve"
+    bl_label = ACTIONS["shelve"]
+    bl_description = "Park pending work on the server without creating a revision"
+
+    def execute(self, _context):
+        try:
+            runtime.save_scene_if_dirty()
+            bridge = runtime.client()
+            runtime.run_operation(
+                bridge.shelve,
+                success=lambda result: f"Shelved {len(result.get('files', []))} file(s)",
+                label=_words.progress_for("shelve"),
+            )
+        except BridgeError as error:
+            self.report({"ERROR"}, str(error))
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
+class OPENASSET_OT_unshelve(bpy.types.Operator):
+    bl_idname = "openasset.unshelve"
+    bl_label = ACTIONS["unshelve"]
+    bl_description = "Restore this workspace's shelved work as pending changes"
+
+    def execute(self, _context):
+        try:
+            bridge = runtime.client()
+            runtime.run_operation(
+                bridge.unshelve,
+                success=lambda result: f"Restored {result.get('restored_count', 0)} file(s)",
+                label=_words.progress_for("unshelve"),
             )
         except BridgeError as error:
             self.report({"ERROR"}, str(error))
@@ -239,7 +276,7 @@ class OPENASSET_OT_submit(bpy.types.Operator):
 
 class OPENASSET_OT_revert(bpy.types.Operator):
     bl_idname = "openasset.revert"
-    bl_label = "Revert Checkout"
+    bl_label = ACTIONS["revert"]
     bl_description = "Remove pending source-control intent and release the scene lock"
 
     def invoke(self, context, _event):
@@ -252,7 +289,7 @@ class OPENASSET_OT_revert(bpy.types.Operator):
             runtime.run_operation(
                 lambda: bridge.revert(path),
                 success=lambda result: f"Reverted checkout for {result['path']}",
-                label="Reverting checkout",
+                label=_words.progress_for("revert"),
             )
         except BridgeError as error:
             self.report({"ERROR"}, str(error))
@@ -261,14 +298,7 @@ class OPENASSET_OT_revert(bpy.types.Operator):
 
 
 def _status_message(status) -> str:
-    parts = [status.local_state.replace("_", " ").title()]
-    if status.needs_sync:
-        parts.append("Needs Sync")
-    if status.lock_state == "mine":
-        parts.append("Checked Out by Me")
-    elif status.lock_state == "other":
-        parts.append("Checked Out Elsewhere")
-    return " | ".join(parts)
+    return _words.status_from_bridge(status)
 
 
 def _validation_message(result) -> str:
@@ -302,5 +332,7 @@ CLASSES = (
     OPENASSET_OT_sync,
     OPENASSET_OT_validate,
     OPENASSET_OT_submit,
+    OPENASSET_OT_shelve,
+    OPENASSET_OT_unshelve,
     OPENASSET_OT_revert,
 )

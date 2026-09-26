@@ -1,13 +1,15 @@
-import { AlertTriangle, Send } from "lucide-react";
+import { AlertTriangle, Inbox, Send } from "lucide-react";
 import type { Changelist } from "../types/domain";
 import { StatusBadge } from "./StatusBadge";
 
 interface ChangelistCardProps {
   changelist: Changelist;
   onSubmit: (changelist: Changelist) => void;
+  onShelve?: (changelist: Changelist) => void;
+  busy?: boolean;
 }
 
-export function ChangelistCard({ changelist, onSubmit }: ChangelistCardProps) {
+export function ChangelistCard({ changelist, onSubmit, onShelve, busy = false }: ChangelistCardProps) {
   return (
     <article className="changelist-card">
       <header className="card-header-row">
@@ -32,10 +34,16 @@ export function ChangelistCard({ changelist, onSubmit }: ChangelistCardProps) {
         </div>
       )}
       <footer className="button-row">
-        <button className="primary-button" type="button" onClick={() => onSubmit(changelist)}>
+        <button className="primary-button" type="button" onClick={() => onSubmit(changelist)} disabled={busy}>
           <Send size={16} />
           Submit
         </button>
+        {onShelve && (
+          <button className="secondary-button" type="button" onClick={() => onShelve(changelist)} disabled={busy}>
+            <Inbox size={16} />
+            Shelve Changes
+          </button>
+        )}
       </footer>
     </article>
   );

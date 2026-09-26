@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
 
+pub mod oidc;
+
 use crate::{
     api::AppState,
     audit,
@@ -217,8 +219,15 @@ pub async fn login(
         ));
     };
 
-    let password_hash: String = row.get("password_hash");
-    if !verify_password(&req.password, &password_hash)? {
+    // A directory-managed account has no local password, so there is nothing to
+    // verify here. It is reported like any other failure: confirming that a
+    // username exists but uses SSO would leak directory membership.
+    let password_hash: Option<String> = row.get("password_hash");
+    let verified = match password_hash.as_deref() {
+        Some(hash) => verify_password(&req.password, hash)?,
+        None => false,
+    };
+    if !verified {
         audit::record(
             &state.db,
             audit::AuditEvent::new(
@@ -340,11 +349,15 @@ pub async fn change_password(
         ));
     }
 
-    let current_hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
-        .bind(user.user_id)
-        .fetch_optional(&state.db)
-        .await?
-        .ok_or_else(|| AppError::Unauthorized("account no longer exists".to_string()))?;
+    let current_hash: Option<String> =
+        sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
+            .bind(user.user_id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or_else(|| AppError::Unauthorized("account no longer exists".to_string()))?;
+    let current_hash = current_hash.ok_or_else(|| {
+        AppError::bad_request("this account signs in through your identity provider")
+    })?;
     if !verify_password(&req.current_password, &current_hash)? {
         return Err(AppError::Unauthorized(
             "current password is incorrect".to_string(),

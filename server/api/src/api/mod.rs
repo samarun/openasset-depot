@@ -20,7 +20,7 @@ use tower_http::{
 
 use crate::{
     adapters::AdapterRegistry,
-    auth::{AuthUser, JwtService},
+    auth::{oidc::OidcStore, AuthUser, JwtService},
     config::Config,
     error::{AppError, AppResult},
     filetypes::FileTypeMatcher,
@@ -36,6 +36,8 @@ pub struct AppState {
     pub jwt: Arc<JwtService>,
     pub filetypes: Arc<RwLock<FileTypeMatcher>>,
     pub adapters: Arc<AdapterRegistry>,
+    /// Pending SSO authorizations and cached provider metadata.
+    pub oidc: Arc<OidcStore>,
 }
 
 impl AppState {
@@ -54,6 +56,7 @@ impl AppState {
             jwt: Arc::new(jwt),
             filetypes: Arc::new(RwLock::new(filetypes)),
             adapters: Arc::new(AdapterRegistry::default_registry()),
+            oidc: Arc::new(OidcStore::default()),
         }
     }
 
@@ -97,6 +100,7 @@ pub fn build_router(state: AppState) -> Router {
             header::RANGE,
             HeaderName::from_static("x-request-id"),
             HeaderName::from_static("idempotency-key"),
+            HeaderName::from_static("x-upload-offset"),
         ])
         .expose_headers([
             HeaderName::from_static("x-request-id"),
@@ -120,6 +124,14 @@ pub fn build_router(state: AppState) -> Router {
             post(crate::auth::change_password),
         )
         .route(
+            "/api/auth/sso",
+            get(crate::auth::oidc::oidc_status).post(crate::auth::oidc::oidc_start),
+        )
+        .route(
+            "/api/auth/sso/callback",
+            post(crate::auth::oidc::oidc_callback),
+        )
+        .route(
             "/api/depots",
             get(crate::depot::list_depots).post(crate::depot::create_depot),
         )
@@ -127,6 +139,26 @@ pub fn build_router(state: AppState) -> Router {
             "/api/depots/:id/permissions",
             get(crate::permissions::list_depot_permissions)
                 .post(crate::permissions::grant_depot_permission),
+        )
+        .route(
+            "/api/depots/:id/group-permissions",
+            get(crate::groups::list_group_permissions).post(crate::groups::grant_group_permission),
+        )
+        .route(
+            "/api/depots/:id/group-permissions/:group_id",
+            delete(crate::groups::revoke_group_permission),
+        )
+        .route(
+            "/api/groups",
+            get(crate::groups::list_groups).post(crate::groups::create_group),
+        )
+        .route(
+            "/api/groups/:id/members",
+            get(crate::groups::list_group_members).post(crate::groups::add_group_member),
+        )
+        .route(
+            "/api/groups/:id/members/:user_id",
+            delete(crate::groups::remove_group_member),
         )
         .route(
             "/api/streams",
@@ -139,6 +171,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/workspaces/:id",
             delete(crate::workspaces::delete_workspace),
+        )
+        .route(
+            "/api/workspaces/:id/collaborators",
+            get(crate::workspaces::list_collaborators),
         )
         .route("/api/files/add", post(crate::changelists::file_add))
         .route("/api/files/edit", post(crate::changelists::file_edit))
@@ -153,6 +189,34 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/changelists/:id/submit",
             post(crate::changelists::submit_changelist),
+        )
+        .route(
+            "/api/changelists/:id/shelve",
+            get(crate::shelves::get_shelf)
+                .post(crate::shelves::shelve_changelist)
+                .delete(crate::shelves::discard_shelf),
+        )
+        .route(
+            "/api/changelists/:id/unshelve",
+            post(crate::shelves::unshelve_changelist),
+        )
+        .route(
+            "/api/dependencies/impact",
+            get(crate::dependencies::dependency_impact),
+        )
+        .route("/api/shelves", get(crate::shelves::list_shelves))
+        .route(
+            "/api/shelves/content",
+            get(crate::shelves::download_shelf_content),
+        )
+        .route("/api/uploads", post(crate::uploads::begin_upload))
+        .route(
+            "/api/uploads/:id",
+            get(crate::uploads::get_upload).post(crate::uploads::upload_chunk),
+        )
+        .route(
+            "/api/uploads/:id/finalize",
+            post(crate::uploads::finalize_upload),
         )
         .route("/api/sync/plan", post(crate::sync::plan_sync))
         .route("/api/sync/ack", post(crate::sync::ack_sync))
@@ -178,8 +242,29 @@ pub fn build_router(state: AppState) -> Router {
             "/api/reviews/proxy",
             get(crate::reviews::download_review_proxy).post(crate::reviews::upload_review_proxy),
         )
+        .route(
+            "/api/reviews/requests",
+            get(crate::reviews::requests::list_review_requests)
+                .post(crate::reviews::requests::create_review_request),
+        )
+        .route(
+            "/api/reviews/requests/:id",
+            get(crate::reviews::requests::get_review_request),
+        )
+        .route(
+            "/api/reviews/requests/:id/decision",
+            post(crate::reviews::requests::decide_review_request),
+        )
+        .route(
+            "/api/reviews/requests/:id/close",
+            post(crate::reviews::requests::close_review_request),
+        )
         .route("/api/locks", get(crate::locking::list_locks))
         .route("/api/locks/page", get(crate::locking::list_locks_page))
+        .route(
+            "/api/admin/locks/force-unlock",
+            post(crate::locking::force_unlock_file),
+        )
         .route("/api/audit", get(crate::audit::list_audit_events))
         .route(
             "/api/dependencies",

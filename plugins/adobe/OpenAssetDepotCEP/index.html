@@ -5,7 +5,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:;" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenAsset Depot</title>
-  <link rel="stylesheet" href="css/panel.css" />
+  <link rel="stylesheet" href="lib/panel.css" />
 </head>
 <body>
   <main>
@@ -26,7 +26,7 @@
       <div class="eyebrow">ACTIVE DOCUMENT</div>
       <h2 id="file-name">No saved document</h2>
       <p id="file-path">Save the document inside an OpenAsset workspace.</p>
-      <div id="status" class="status neutral">Unavailable</div>
+      <div id="status" class="status">Unavailable</div>
     </section>
 
     <section class="actions">
@@ -35,10 +35,12 @@
       <button id="sync">Sync Latest</button>
       <button id="validate">Validate</button>
       <button id="revert">Revert Intent</button>
+      <button id="shelve">Shelve Changes</button>
+      <button id="unshelve">Restore Shelf</button>
     </section>
 
     <section class="submit">
-      <label>Submit note<textarea id="description" rows="3" placeholder="What changed in this creative pass?"></textarea></label>
+      <label>Description<textarea id="description" rows="3" placeholder="What changed in this creative pass?"></textarea></label>
       <button id="submit" class="primary">Submit Changes</button>
     </section>
 

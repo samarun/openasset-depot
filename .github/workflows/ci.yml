@@ -30,6 +30,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Lint optional S3 storage backend
+        run: cargo clippy -p openasset-api --all-targets --features s3 -- -D warnings
       - run: cargo test --workspace
       - name: Run API integration flows
         env:
@@ -124,9 +126,11 @@ jobs:
         with:
           node-version: 22
       - run: ./scripts/check-release-version.py
+      - run: ./scripts/check-terminology.py
       - run: PYTHONPATH=plugins/common python -m unittest discover -s plugins/common/tests -v
       - run: node --test plugins/common/node/test/openasset-cli.test.js
       - run: python -m compileall -q plugins/blender plugins/maya plugins/houdini plugins/nuke
+      - run: python -m compileall -q scripts/host-smoke.py scripts/host-smoke
       - run: python -c "import xml.etree.ElementTree as ET; ET.parse('plugins/adobe/OpenAssetDepotCEP/CSXS/manifest.xml'); ET.parse('plugins/resolve/OpenAssetDepotResolve/manifest.xml'); ET.parse('plugins/houdini/openasset_depot_houdini/python_panels/openasset_depot.pypanel')"
       - run: node --check plugins/adobe/OpenAssetDepotCEP/js/panel.js
       - run: node --check plugins/resolve/OpenAssetDepotResolve/main.js

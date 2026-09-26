@@ -35,9 +35,26 @@
   --shadow: 0 1px 2px rgba(20, 24, 28, 0.04), 0 8px 24px rgba(20, 24, 28, 0.06);
   --shadow-drawer: -12px 0 40px rgba(20, 24, 28, 0.16);
 
+  /*
+   * Type scale. Headings may only use the three top steps; everything below is
+   * UI chrome. Adding a step here is a deliberate design decision, not a
+   * per-page adjustment, which is how this previously grew to 18 sizes.
+   */
+  --text-display: 34px;
+  --text-display-sm: 26px;
+  --text-title: 19px;
+  --text-lead: 15px;
+  --text-body: 13px;
+  --text-label: 12px;
+  --text-caption: 11px;
+  --text-micro: 10px;
+
+  --weight-regular: 450;
+  --weight-strong: 600;
+
   --motion-fast: 120ms;
   --motion-standard: 180ms;
-  --motion-slow: 280ms;
+  --motion-slow: 240ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-emphasized: cubic-bezier(0.2, 0, 0, 1.2);
 }

@@ -17,9 +17,12 @@ use crate::{
     audit,
     changelists::insert_blob_records,
     error::{AppError, AppResult},
+    idempotency,
     paths::normalize_depot_path,
     workspaces::workspace_for_user,
 };
+
+pub mod requests;
 
 const MAX_ANNOTATION_BYTES: usize = 128 * 1024;
 const MAX_REVIEW_PROXY_BYTES: usize = 512 * 1024 * 1024;
@@ -50,7 +53,7 @@ pub struct ResolveReviewCommentRequest {
     pub resolved: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ReviewCommentResponse {
     pub id: Uuid,
     pub path: String,
@@ -144,46 +147,66 @@ pub async fn create_comment(
         }
     }
 
-    let comment_id: Uuid = sqlx::query_scalar(
-        r#"
+    // Without a key a retried post would leave two identical notes on the same
+    // frame, which is the one review outcome an artist cannot undo themselves.
+    let idempotency_request = serde_json::json!({
+        "revision_id": revision_id,
+        "parent_comment_id": request.parent_comment_id,
+        "body": body,
+        "timecode_ms": request.timecode_ms,
+        "frame_number": request.frame_number,
+    });
+    let response = idempotency::run(
+        &state.db,
+        &headers,
+        &user,
+        "asset_review_comment_create",
+        &idempotency_request,
+        || async {
+            let comment_id: Uuid = sqlx::query_scalar(
+                r#"
         INSERT INTO asset_review_comments
             (revision_id, author_user_id, parent_comment_id, body,
              timecode_ms, frame_number, annotation)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id
         "#,
-    )
-    .bind(revision_id)
-    .bind(user.user_id)
-    .bind(request.parent_comment_id)
-    .bind(body)
-    .bind(request.timecode_ms)
-    .bind(request.frame_number)
-    .bind(request.annotation)
-    .fetch_one(&state.db)
-    .await?;
-
-    audit::record(
-        &state.db,
-        audit::AuditEvent {
-            actor_user_id: Some(user.user_id),
-            stream_id: Some(workspace.stream_id),
-            workspace_id: Some(workspace.id),
-            depot_path: Some(&path),
-            ..audit::AuditEvent::new(
-                "asset_review_comment_create",
-                serde_json::json!({
-                    "comment_id": comment_id,
-                    "revision_number": request.revision_number,
-                    "timecode_ms": request.timecode_ms,
-                    "frame_number": request.frame_number,
-                }),
             )
+            .bind(revision_id)
+            .bind(user.user_id)
+            .bind(request.parent_comment_id)
+            .bind(body)
+            .bind(request.timecode_ms)
+            .bind(request.frame_number)
+            .bind(request.annotation)
+            .fetch_one(&state.db)
+            .await?;
+
+            audit::record(
+                &state.db,
+                audit::AuditEvent {
+                    actor_user_id: Some(user.user_id),
+                    stream_id: Some(workspace.stream_id),
+                    workspace_id: Some(workspace.id),
+                    depot_path: Some(&path),
+                    ..audit::AuditEvent::new(
+                        "asset_review_comment_create",
+                        serde_json::json!({
+                            "comment_id": comment_id,
+                            "revision_number": request.revision_number,
+                            "timecode_ms": request.timecode_ms,
+                            "frame_number": request.frame_number,
+                        }),
+                    )
+                },
+            )
+            .await?;
+
+            comment_by_id(&state.db, comment_id).await
         },
     )
     .await?;
-
-    Ok(Json(comment_by_id(&state.db, comment_id).await?))
+    Ok(Json(response))
 }
 
 pub async fn resolve_comment(
@@ -213,42 +236,61 @@ pub async fn resolve_comment(
         ));
     }
 
-    sqlx::query(
-        r#"
+    let path: String = row.get("depot_path");
+    let revision_number: i32 = row.get("revision_number");
+    // The comment is addressed by path, so it has to be part of the hashed
+    // request; otherwise one key would cover resolving any comment.
+    let keyed_request = serde_json::json!({
+        "comment_id": comment_id,
+        "workspace_id": request.workspace_id,
+        "resolved": request.resolved,
+    });
+    let response = idempotency::run(
+        &state.db,
+        &headers,
+        &user,
+        "asset_review_comment_resolve",
+        &keyed_request,
+        || async {
+            sqlx::query(
+                r#"
         UPDATE asset_review_comments
         SET resolved_at = CASE WHEN $2 THEN now() ELSE NULL END,
             resolved_by = CASE WHEN $2 THEN $3 ELSE NULL END
         WHERE id = $1
         "#,
-    )
-    .bind(comment_id)
-    .bind(request.resolved)
-    .bind(user.user_id)
-    .execute(&state.db)
-    .await?;
-
-    let path: String = row.get("depot_path");
-    let revision_number: i32 = row.get("revision_number");
-    audit::record(
-        &state.db,
-        audit::AuditEvent {
-            actor_user_id: Some(user.user_id),
-            stream_id: Some(workspace.stream_id),
-            workspace_id: Some(workspace.id),
-            depot_path: Some(&path),
-            ..audit::AuditEvent::new(
-                "asset_review_comment_resolve",
-                serde_json::json!({
-                    "comment_id": comment_id,
-                    "revision_number": revision_number,
-                    "resolved": request.resolved,
-                }),
             )
+            .bind(comment_id)
+            .bind(request.resolved)
+            .bind(user.user_id)
+            .execute(&state.db)
+            .await?;
+
+            audit::record(
+                &state.db,
+                audit::AuditEvent {
+                    actor_user_id: Some(user.user_id),
+                    stream_id: Some(workspace.stream_id),
+                    workspace_id: Some(workspace.id),
+                    depot_path: Some(&path),
+                    ..audit::AuditEvent::new(
+                        "asset_review_comment_resolve",
+                        serde_json::json!({
+                            "comment_id": comment_id,
+                            "revision_number": revision_number,
+                            "resolved": request.resolved,
+                        }),
+                    )
+                },
+            )
+            .await?;
+
+            comment_by_id(&state.db, comment_id).await
         },
     )
     .await?;
 
-    Ok(Json(comment_by_id(&state.db, comment_id).await?))
+    Ok(Json(response))
 }
 
 pub async fn download_review_media(
@@ -519,7 +561,7 @@ fn requested_byte_range(headers: &HeaderMap, total_size: u64) -> AppResult<Optio
     Ok(Some((start, end)))
 }
 
-async fn revision_for_target(
+pub(crate) async fn revision_for_target(
     db: &PgPool,
     stream_id: Uuid,
     path: &str,

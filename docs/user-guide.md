@@ -253,7 +253,7 @@ include phase and percentage updates; shorter actions such as checkout, add,
 validate, and revert show their current operation and a clear completion or
 recovery message.
 
-**Revert Checkout** removes the pending source-control operation and releases
+**Revert Intent** removes the pending source-control operation and releases
 the lock, but intentionally preserves the local creative file. It is not an
 “erase my edits” command.
 
@@ -272,16 +272,16 @@ The packaged add-on is:
 5. Save the `.blend` file somewhere inside the initialized workspace.
 6. In the 3D View press **N**, then open the **OpenAsset** tab.
 
-For an existing tracked scene, select **Refresh**, then **Check Out** before
-editing. Save, **Validate Scene**, enter a description, and **Submit Changes**.
+For an existing tracked scene, select **Refresh Status**, then **Check Out**
+before editing. Save, **Validate**, enter a description, and **Submit Changes**.
 
 If the scene was modified before checkout, **Submit Changes** verifies that the
 workspace is current, obtains the exclusive lock, marks the tracked scene for
 edit, and submits it automatically. If a newer revision or another artist's
 lock exists, the panel stops with a human-readable next action.
 
-For a brand-new `.blend`, save it inside the workspace and select **Add Current
-Scene**, then submit. **Submit Changes** also detects an untracked current scene
+For a brand-new `.blend`, save it inside the workspace and select **Add to
+Depot**, then submit. **Submit Changes** also detects an untracked current scene
 and marks it for addition automatically. The equivalent CLI command is:
 
 ```sh

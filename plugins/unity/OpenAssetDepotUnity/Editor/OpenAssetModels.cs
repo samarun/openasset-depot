@@ -124,4 +124,42 @@ namespace OpenAssetDepot.Unity
         public ValidationData data;
         public string error;
     }
+
+    [Serializable]
+    internal sealed class ShelvedFile
+    {
+        public string path;
+        public string action;
+    }
+
+    [Serializable]
+    internal sealed class ShelfData
+    {
+        public ShelvedFile[] files;
+    }
+
+    [Serializable]
+    internal sealed class ShelfEnvelope
+    {
+        public int protocol_version;
+        public bool ok;
+        public ShelfData data;
+        public string error;
+    }
+
+    [Serializable]
+    internal sealed class UnshelveData
+    {
+        public int restored_count;
+        public string[] written;
+    }
+
+    [Serializable]
+    internal sealed class UnshelveEnvelope
+    {
+        public int protocol_version;
+        public bool ok;
+        public UnshelveData data;
+        public string error;
+    }
 }

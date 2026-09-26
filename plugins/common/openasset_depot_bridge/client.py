@@ -37,15 +37,32 @@ class OperationProgress:
     message: str
     completed: int
     total: int
+    # Per-file transfer detail. These stay None when the CLI does not know a
+    # value yet, so panels can distinguish "zero" from "not reported".
+    path: Optional[str] = None
+    files_completed: Optional[int] = None
+    files_total: Optional[int] = None
+    bytes_completed: Optional[int] = None
+    bytes_total: Optional[int] = None
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "OperationProgress":
+        def optional_int(key: str) -> Optional[int]:
+            value = payload.get(key)
+            return None if value is None else int(value)
+
+        path = payload.get("path")
         return cls(
             operation=str(payload.get("operation", "operation")),
             phase=str(payload.get("phase", "working")),
             message=str(payload.get("message", "Working")),
             completed=int(payload.get("completed", 0)),
             total=max(1, int(payload.get("total", 100))),
+            path=None if path is None else str(path),
+            files_completed=optional_int("files_completed"),
+            files_total=optional_int("files_total"),
+            bytes_completed=optional_int("bytes_completed"),
+            bytes_total=optional_int("bytes_total"),
         )
 
 
@@ -183,6 +200,12 @@ class BridgeClient:
             timeout_seconds=timeout_seconds,
         )
 
+    def shelve(self, timeout_seconds: Optional[int] = None) -> Dict[str, Any]:
+        return self._invoke("shelve", timeout_seconds=timeout_seconds)
+
+    def unshelve(self, timeout_seconds: Optional[int] = None) -> Dict[str, Any]:
+        return self._invoke("unshelve", timeout_seconds=timeout_seconds)
+
     def upload_preview(
         self,
         path: os.PathLike[str] | str,
@@ -235,7 +258,7 @@ class BridgeClient:
         environment = os.environ.copy()
         environment.update(self.environment)
         effective_timeout = timeout_seconds or self.timeout_seconds
-        if arguments and arguments[0] in {"sync", "submit"}:
+        if arguments and arguments[0] in {"sync", "submit", "shelve", "unshelve"}:
             effective_timeout = max(effective_timeout, LONG_OPERATION_TIMEOUT_SECONDS)
         envelope, stderr, return_code = _run_protocol_v2(
             command,

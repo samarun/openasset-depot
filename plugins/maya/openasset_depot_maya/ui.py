@@ -4,10 +4,13 @@ import maya.cmds as cmds
 import maya.mel as mel
 
 from . import runtime
-from .bridge_loader import load_bridge
+from .bridge_loader import load_bridge, load_theme, load_words
 
 
 _, BridgeError, _ = load_bridge()
+_words = load_words()
+_theme = load_theme()
+ACTIONS = _words.ACTIONS
 WINDOW = "openassetDepotWindow"
 MENU = "openassetDepotMenu"
 STATUS = "openassetDepotStatus"
@@ -20,26 +23,34 @@ _script_jobs = []
 def show() -> None:
     if cmds.window(WINDOW, exists=True):
         cmds.deleteUI(WINDOW)
-    window = cmds.window(WINDOW, title="OpenAsset Depot", widthHeight=(360, 410), sizeable=True)
+    window = cmds.window(WINDOW, title=_words.PRODUCT_NAME, widthHeight=(360, 410), sizeable=True)
     cmds.columnLayout(adjustableColumn=True, rowSpacing=8, columnAttach=("both", 12))
     cmds.text(label="CURRENT SCENE", align="left", font="smallBoldLabelFont")
     cmds.text(STATUS, label="Save the scene to begin", align="left", wordWrap=True, height=42)
     cmds.progressBar(PROGRESS, maxValue=100, progress=0, height=8, visible=False)
     cmds.separator(style="in")
     cmds.columnLayout(ACTION_COLUMN, adjustableColumn=True, rowSpacing=6)
-    cmds.button(label="Refresh Status", command=lambda *_: refresh())
-    cmds.button(label="Check Out Scene", command=lambda *_: checkout(), backgroundColor=(0.16, 0.42, 0.38))
-    cmds.button(label="Sync Latest", command=lambda *_: sync())
-    cmds.button(label="Validate Scene", command=lambda *_: validate())
+    cmds.button(label=ACTIONS["refresh"], command=lambda *_: refresh())
+    cmds.button(
+        label=_words.qualified("checkout", "Scene"),
+        command=lambda *_: checkout(),
+        # `cmds.button` always draws its label in the host's light text colour,
+        # so the accent has to be the dark one to stay readable.
+        backgroundColor=_theme.rgb_floats("primary_deep"),
+    )
+    cmds.button(label=ACTIONS["sync"], command=lambda *_: sync())
+    cmds.button(label=ACTIONS["validate"], command=lambda *_: validate())
     cmds.textFieldGrp(
         DESCRIPTION,
-        label="Description",
+        label=_words.FIELDS["description"],
         text="Maya scene update",
         columnWidth2=(80, 240),
     )
-    cmds.button(label="Submit Changes", command=lambda *_: submit())
+    cmds.button(label=ACTIONS["submit"], command=lambda *_: submit())
+    cmds.button(label=ACTIONS["shelve"], command=lambda *_: shelve())
+    cmds.button(label=ACTIONS["unshelve"], command=lambda *_: unshelve())
     cmds.separator(style="none", height=4)
-    cmds.button(label="Revert Checkout", command=lambda *_: revert())
+    cmds.button(label=ACTIONS["revert"], command=lambda *_: revert())
     cmds.setParent("..")
     cmds.separator(style="in")
     cmds.button(label="Settings", command=lambda *_: settings())
@@ -55,8 +66,12 @@ def install_menu() -> None:
     menu = cmds.menu(MENU, label="OpenAsset", parent=main_window, tearOff=False)
     cmds.menuItem(label="Workspace", parent=menu, command=lambda *_: show())
     cmds.menuItem(divider=True, parent=menu)
-    cmds.menuItem(label="Check Out Current Scene", parent=menu, command=lambda *_: checkout())
-    cmds.menuItem(label="Sync Latest", parent=menu, command=lambda *_: sync())
+    cmds.menuItem(
+        label=_words.qualified("checkout", "Current Scene"),
+        parent=menu,
+        command=lambda *_: checkout(),
+    )
+    cmds.menuItem(label=ACTIONS["sync"], parent=menu, command=lambda *_: sync())
 
 
 def uninstall() -> None:
@@ -74,7 +89,7 @@ def refresh() -> None:
     _run(
         lambda bridge, path: bridge.status([path]),
         lambda values: _status_message(values[0]),
-        "Refreshing status",
+        _words.progress_for("refresh"),
     )
 
 
@@ -82,7 +97,7 @@ def checkout() -> None:
     _run(
         lambda bridge, path: bridge.checkout(path, "Editing in Maya"),
         lambda result: f"Checked out {result['path']}",
-        "Checking out scene",
+        _words.progress_for("checkout"),
     )
 
 
@@ -90,7 +105,7 @@ def sync() -> None:
     _run(
         lambda bridge, _path: bridge.sync(timeout_seconds=1800),
         lambda result: f"Synced {result.get('synced_count', 0)} file(s)",
-        "Syncing latest files",
+        _words.progress_for("sync"),
     )
 
 
@@ -98,25 +113,41 @@ def validate() -> None:
     _run(
         lambda bridge, path: bridge.validate([path], "Maya"),
         _validation_message,
-        "Validating scene",
+        _words.progress_for("validate"),
     )
 
 
 def submit() -> None:
     description = cmds.textFieldGrp(DESCRIPTION, query=True, text=True).strip()
     if not description:
-        set_status("Enter a submit description.", error=True)
+        set_status(f"Enter a {_words.FIELDS['description'].lower()} first.", error=True)
         return
     _run(
         lambda bridge, _path: bridge.submit(description, timeout_seconds=1800),
         lambda result: f"Submitted {len(result.get('revisions', []))} file(s)",
-        "Submitting changes",
+        _words.progress_for("submit"),
+    )
+
+
+def shelve() -> None:
+    _run(
+        lambda bridge, _path: bridge.shelve(timeout_seconds=1800),
+        lambda result: f"Shelved {len(result.get('files', []))} file(s)",
+        _words.progress_for("shelve"),
+    )
+
+
+def unshelve() -> None:
+    _run(
+        lambda bridge, _path: bridge.unshelve(timeout_seconds=1800),
+        lambda result: f"Restored {result.get('restored_count', 0)} file(s)",
+        _words.progress_for("unshelve"),
     )
 
 
 def revert() -> None:
     if not cmds.confirmDialog(
-        title="Revert Checkout",
+        title=ACTIONS["revert"],
         message="Remove this scene from the pending changelist and release its lock?",
         button=["Revert", "Cancel"],
         defaultButton="Cancel",
@@ -126,8 +157,8 @@ def revert() -> None:
         return
     _run(
         lambda bridge, path: bridge.revert(path),
-        lambda result: f"Reverted checkout for {result['path']}",
-        "Reverting checkout",
+        lambda result: f"Reverted {result['path']}",
+        _words.progress_for("revert"),
     )
 
 
@@ -139,7 +170,7 @@ def settings() -> None:
         else ""
     )
     result = cmds.promptDialog(
-        title="OpenAsset Settings",
+        title=f"{_words.PRODUCT_NAME} Settings",
         message="oad CLI path (leave blank for PATH):",
         text=current_cli,
         button=["Next", "Cancel"],
@@ -151,7 +182,7 @@ def settings() -> None:
         return
     cmds.optionVar(stringValue=("openassetDepotCli", cmds.promptDialog(query=True, text=True).strip()))
     result = cmds.promptDialog(
-        title="OpenAsset Settings",
+        title=f"{_words.PRODUCT_NAME} Settings",
         message="Server URL override (optional):",
         text=current_server,
         button=["Save", "Cancel"],
@@ -167,7 +198,7 @@ def settings() -> None:
 
 def set_status(message: str, error: bool = False) -> None:
     if cmds.control(STATUS, exists=True):
-        color = (0.75, 0.24, 0.2) if error else (0.7, 0.7, 0.7)
+        color = _theme.rgb_floats("red") if error else _theme.rgb_floats("muted")
         cmds.text(STATUS, edit=True, label=message, font="boldLabelFont", backgroundColor=color)
 
 
@@ -207,14 +238,10 @@ def _install_script_jobs(parent: str) -> None:
 
 
 def _status_message(status) -> str:
-    values = [status.local_state.replace("_", " ").title()]
-    if status.needs_sync:
-        values.append("Needs Sync")
-    if status.lock_state == "mine":
-        values.append("Checked Out by Me")
-    elif status.lock_state == "other":
-        values.append("Checked Out Elsewhere")
-    return " | ".join(values)
+    label = _words.status_from_bridge(status)
+    if status.lock_state == "other" and status.lock_reason:
+        return f"{label} — {status.lock_reason}"
+    return label
 
 
 def _validation_message(result) -> str:

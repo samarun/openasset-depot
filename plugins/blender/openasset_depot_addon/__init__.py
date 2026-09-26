@@ -1,7 +1,10 @@
 import bpy
 
 from . import operators, panel, runtime
+from .bridge_loader import load_words
 
+
+FIELDS = load_words().FIELDS
 
 bl_info = {
     "name": "OpenAsset Depot",
@@ -48,7 +51,7 @@ class OpenAssetDepotPreferences(bpy.types.AddonPreferences):
 class OpenAssetDepotState(bpy.types.PropertyGroup):
     message: bpy.props.StringProperty(default="Save the scene to begin")
     submit_description: bpy.props.StringProperty(
-        name="Submit Description",
+        name=FIELDS["description"],
         default="Blender scene update",
     )
     busy: bpy.props.BoolProperty(default=False)

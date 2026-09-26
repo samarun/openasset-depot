@@ -95,7 +95,7 @@ pub async fn list_depots(
             r#"
             SELECT DISTINCT d.id, d.name, d.description
             FROM depots d
-            LEFT JOIN depot_user_permissions p
+            LEFT JOIN effective_depot_permissions p
               ON p.depot_id = d.id AND p.user_id = $1
             WHERE d.owner_user_id = $1 OR p.role IN ('read', 'write', 'admin')
             ORDER BY d.name
@@ -132,12 +132,17 @@ pub fn validate_name(name: &str) -> AppResult<()> {
     if name.len() < 2 || name.len() > 96 {
         return Err(AppError::bad_request("name must be 2 to 96 characters"));
     }
+    if name.trim() != name {
+        return Err(AppError::bad_request(
+            "name cannot start or end with a space",
+        ));
+    }
     if !name
         .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | ' '))
     {
         return Err(AppError::bad_request(
-            "name may contain letters, numbers, '.', '_' and '-'",
+            "name may contain letters, numbers, spaces, '.', '_' and '-'",
         ));
     }
     Ok(())
@@ -149,5 +154,18 @@ fn map_unique_conflict(message: &'static str) -> impl FnOnce(sqlx::Error) -> App
             AppError::conflict(message)
         }
         _ => AppError::Database(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_name;
+
+    #[test]
+    fn studio_names_can_be_human_readable_without_accepting_path_syntax() {
+        assert!(validate_name("Review QA Depot").is_ok());
+        assert!(validate_name("main-v2").is_ok());
+        assert!(validate_name(" trailing").is_err());
+        assert!(validate_name("shows/feature").is_err());
     }
 }

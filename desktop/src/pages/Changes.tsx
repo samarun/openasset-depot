@@ -6,10 +6,12 @@ import type { Changelist } from "../types/domain";
 interface ChangesProps {
   changelists: Changelist[];
   onSubmit: (changelist: Changelist) => void;
+  onShelve?: (changelist: Changelist) => void;
   onBrowseWorkspace: () => void;
+  busy?: boolean;
 }
 
-export function Changes({ changelists, onSubmit, onBrowseWorkspace }: ChangesProps) {
+export function Changes({ changelists, onSubmit, onShelve, onBrowseWorkspace, busy = false }: ChangesProps) {
   return (
     <main className="page">
       <header className="page-heading">
@@ -37,7 +39,13 @@ export function Changes({ changelists, onSubmit, onBrowseWorkspace }: ChangesPro
       ) : (
         <section className="card-list">
           {changelists.map((changelist) => (
-            <ChangelistCard key={changelist.id} changelist={changelist} onSubmit={onSubmit} />
+            <ChangelistCard
+              key={changelist.id}
+              changelist={changelist}
+              onSubmit={onSubmit}
+              onShelve={onShelve}
+              busy={busy}
+            />
           ))}
         </section>
       )}

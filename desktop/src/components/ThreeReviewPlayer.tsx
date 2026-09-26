@@ -120,7 +120,7 @@ export function ThreeReviewPlayer({ fileName, source, seekRequest, onTimeChange 
       const delta = Math.min(clock.getDelta(), 0.1);
       const runtime = runtimeRef.current;
       if (runtime?.mixer && playingRef.current) runtime.mixer.update(delta);
-      const current = runtime?.mixer?.time ?? 0;
+      const current = runtime?.action?.time ?? runtime?.mixer?.time ?? 0;
       setElapsed(current);
       const currentFrame = Math.round(current * 24);
       if (currentFrame !== lastReportedFrameRef.current) {
@@ -145,9 +145,16 @@ export function ThreeReviewPlayer({ fileName, source, seekRequest, onTimeChange 
   }, [fileName, source]);
 
   useEffect(() => {
-    if (!seekRequest || !runtimeRef.current?.mixer) return;
+    const runtime = runtimeRef.current;
+    const mixer = runtime?.mixer;
+    if (!seekRequest || !runtime || !mixer) return;
     const seconds = Math.max(0, Math.min(seekRequest.timecodeMs / 1000, duration || Number.MAX_SAFE_INTEGER));
-    runtimeRef.current.mixer.setTime(seconds);
+    if (runtime.action) {
+      runtime.action.time = seconds;
+      mixer.update(0);
+    } else {
+      mixer.setTime(seconds);
+    }
     setElapsed(seconds);
     setPlaying(false);
   }, [duration, seekRequest]);
@@ -156,8 +163,8 @@ export function ThreeReviewPlayer({ fileName, source, seekRequest, onTimeChange 
     const runtime = runtimeRef.current;
     if (!runtime?.mixer || !runtime.clips[index]) return;
     runtime.action?.stop();
-    runtime.mixer.setTime(0);
     runtime.action = runtime.mixer.clipAction(runtime.clips[index]);
+    runtime.action.reset();
     runtime.action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
     runtime.action.clampWhenFinished = !loop;
     runtime.action.play();
@@ -170,7 +177,12 @@ export function ThreeReviewPlayer({ fileName, source, seekRequest, onTimeChange 
     const runtime = runtimeRef.current;
     if (!runtime?.mixer) return;
     const next = Math.max(0, Math.min((duration || Number.MAX_SAFE_INTEGER), elapsed + direction / 24));
-    runtime.mixer.setTime(next);
+    if (runtime.action) {
+      runtime.action.time = next;
+      runtime.mixer.update(0);
+    } else {
+      runtime.mixer.setTime(next);
+    }
     setElapsed(next);
     setPlaying(false);
   }

@@ -1,12 +1,13 @@
 'use strict';
 
 const $ = (id) => document.getElementById(id);
-const controls = ['refresh', 'checkout', 'add', 'sync', 'validate', 'revert', 'submit'];
+const controls = ['refresh', 'checkout', 'add', 'sync', 'validate', 'revert', 'submit', 'shelve', 'unshelve'];
 let files = [];
 let configured = false;
+let words = null;
 
 function busy(value) { controls.forEach((id) => { $(id).disabled = value; }); }
-function message(value, error) { $('message').textContent = value; $('message').style.color = error ? '#efa9a3' : ''; }
+function message(value, error) { $('message').textContent = value; $('message').style.color = error ? 'var(--oad-red)' : ''; }
 function paths() { return files.map((file) => file.path); }
 
 async function loadSettings() {
@@ -17,24 +18,29 @@ async function loadSettings() {
   $('setup').classList.toggle('hidden', configured);
 }
 
+// The badge summarises a multi-clip selection, so it reports the status of the
+// clip that most needs attention, in the same precedence the shared statusLabel
+// uses for a single file.
 function displayStatus(result) {
   const entries = result && result.files || [];
   const badge = $('status');
+  const { STATUSES } = words;
   badge.className = 'status';
   if (entries.some((entry) => entry.lock_state === 'other')) {
-    badge.textContent = 'Some media is checked out by another artist'; badge.classList.add('bad');
+    badge.textContent = STATUSES.in_use; badge.classList.add('bad');
   } else if (entries.some((entry) => entry.pending_action)) {
-    badge.textContent = 'Changes ready to submit'; badge.classList.add('warn');
+    badge.textContent = STATUSES.ready_to_submit; badge.classList.add('warn');
   } else if (entries.some((entry) => entry.needs_sync)) {
-    badge.textContent = 'New versions available'; badge.classList.add('warn');
+    badge.textContent = STATUSES.needs_sync; badge.classList.add('warn');
   } else if (entries.length > 0) {
-    badge.textContent = 'Selected media is ready'; badge.classList.add('good');
+    badge.textContent = STATUSES.up_to_date; badge.classList.add('good');
   } else {
-    badge.textContent = 'Selected media is not tracked';
+    badge.textContent = STATUSES.new_file;
   }
 }
 
 async function refresh() {
+  if (!words) words = await window.openAssetDepot.words();
   await loadSettings();
   if (!configured) return;
   busy(true);
@@ -55,7 +61,7 @@ async function refresh() {
 
 async function run(command, options) {
   if (!configured) { message('Connect a workspace first', true); return; }
-  if (!files.length && !['sync', 'submit'].includes(command)) { message('Select Media Pool clips first', true); return; }
+  if (!files.length && !['sync', 'submit', 'shelve', 'unshelve'].includes(command)) { message('Select Media Pool clips first', true); return; }
   busy(true);
   try {
     await window.openAssetDepot.run(command, options);
@@ -95,5 +101,7 @@ $('sync').addEventListener('click', () => run('sync', {}));
 $('validate').addEventListener('click', () => run('validate', { paths: paths(), adapter: 'resolve' }));
 $('revert').addEventListener('click', () => runForEach('revert', (filePath) => ({ path: filePath })));
 $('submit').addEventListener('click', () => run('submit', { description: $('description').value.trim() || 'Submitted from DaVinci Resolve' }));
+$('shelve').addEventListener('click', () => run('shelve', {}));
+$('unshelve').addEventListener('click', () => run('unshelve', {}));
 
 refresh();

@@ -16,6 +16,8 @@ export type IntegrationCommand =
   | "revert"
   | "sync"
   | "submit"
+  | "shelve"
+  | "unshelve"
   | "history"
   | "validate";
 
@@ -34,6 +36,13 @@ export interface IntegrationProgress {
   message: string;
   completed?: number;
   total?: number;
+  /** Depot path currently being transferred, when the CLI knows one. */
+  path?: string;
+  filesCompleted?: number;
+  /** Absent while a paged sync is still discovering how much work remains. */
+  filesTotal?: number;
+  bytesCompleted?: number;
+  bytesTotal?: number;
 }
 
 export interface PendingIntegrationFile {

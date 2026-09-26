@@ -4,7 +4,7 @@ import { AssetCard } from "../components/AssetCard";
 import { EmptyState } from "../components/EmptyState";
 import { FileInspector } from "../components/FileInspector";
 import { FileRow } from "../components/FileRow";
-import type { AssetFile } from "../types/domain";
+import type { AssetFile, DependencyImpact } from "../types/domain";
 
 interface WorkspaceProps {
   files: AssetFile[];
@@ -19,11 +19,13 @@ interface WorkspaceProps {
   onDelete: (file: AssetFile) => void;
   onSubmit: () => void;
   onReview: (file: AssetFile) => void;
+  onRequestReview?: (file: AssetFile) => void;
   onHistory: () => void;
   hasMoreFiles?: boolean;
   onLoadMore?: () => void;
   busy?: boolean;
   loadPreview?: (file: AssetFile) => Promise<string | undefined>;
+  loadImpact?: (file: AssetFile) => Promise<DependencyImpact | undefined>;
 }
 
 export function Workspace({
@@ -39,11 +41,13 @@ export function Workspace({
   onDelete,
   onSubmit,
   onReview,
+  onRequestReview,
   onHistory,
   hasMoreFiles = false,
   onLoadMore,
   busy = false,
   loadPreview,
+  loadImpact,
 }: WorkspaceProps) {
   const [assetView, setAssetView] = useState<"artist" | "technical">("artist");
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -97,8 +101,9 @@ export function Workspace({
             </button>
           </div>
         </header>
+        {/* Every button here is secondary: the one primary CTA for the session lives in the top bar. */}
         <div className="button-row toolbar-row">
-          <button className="primary-button" type="button" onClick={onSync} disabled={busy}>
+          <button className="secondary-button" type="button" onClick={onSync} disabled={busy}>
             <UploadCloud size={16} />
             {browserMode ? "Refresh Depot" : "Sync Latest"}
           </button>
@@ -151,7 +156,7 @@ export function Workspace({
             title="No versioned assets yet"
             detail="Refresh the workspace after the first file is submitted."
             action={(
-              <button className="primary-button" type="button" onClick={onSync} disabled={busy}>
+              <button className="secondary-button" type="button" onClick={onSync} disabled={busy}>
                 <UploadCloud size={16} />
                 {browserMode ? "Refresh Depot" : "Refresh Workspace"}
               </button>
@@ -188,6 +193,7 @@ export function Workspace({
         onClose={() => setInspectorOpen(false)}
         onSubmit={onSubmit}
         onReview={onReview}
+        onRequestReview={onRequestReview}
         onHistory={onHistory}
         onLock={onLock}
         onUnlock={onUnlock}
@@ -195,6 +201,7 @@ export function Workspace({
         onDelete={onDelete}
         busy={busy}
         loadPreview={loadPreview}
+        loadImpact={loadImpact}
       />
     </main>
   );

@@ -2,12 +2,63 @@ use std::{env, net::SocketAddr, path::PathBuf, time::Duration};
 
 use crate::error::{AppError, AppResult};
 
+/// Where blob chunks are stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StorageBackend {
+    Local,
+    /// Any S3-compatible bucket. `endpoint_url` is required for MinIO and other
+    /// non-AWS implementations and forces path-style addressing.
+    S3 {
+        bucket: String,
+        prefix: String,
+        endpoint_url: Option<String>,
+    },
+}
+
+/// Single sign-on through an OpenID Connect provider.
+///
+/// Optional: when absent the server stays on username/password JWT auth, so a
+/// small studio is never forced to run an identity provider.
+#[derive(Clone, Debug)]
+pub struct OidcConfig {
+    /// Issuer URL. Discovery appends `/.well-known/openid-configuration`.
+    pub issuer: String,
+    pub client_id: String,
+    pub client_secret: String,
+    pub redirect_uri: String,
+    /// Extra scopes beyond `openid profile email`, space separated.
+    pub extra_scopes: Vec<String>,
+    /// ID-token claim listing the user's directory groups. Each value is matched
+    /// against `groups.external_id`, so depot access follows the directory.
+    pub groups_claim: Option<String>,
+    /// Claim naming users who should receive system-admin rights.
+    pub admin_group: Option<String>,
+}
+
+impl OidcConfig {
+    pub fn scope(&self) -> String {
+        let mut scopes = vec!["openid".to_string(), "profile".into(), "email".into()];
+        for scope in &self.extra_scopes {
+            if !scopes.contains(scope) {
+                scopes.push(scope.clone());
+            }
+        }
+        scopes.join(" ")
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub bind_addr: SocketAddr,
     pub database_url: String,
     pub database_max_connections: u32,
     pub storage_root: PathBuf,
+    pub storage_backend: StorageBackend,
+    /// How often the background worker verifies storage and reclaims orphans.
+    /// Zero disables the worker.
+    pub integrity_interval: Duration,
+    /// Blobs sampled per integrity sweep. Keeps a sweep bounded on large depots.
+    pub integrity_sample_size: usize,
     pub jwt_secret: String,
     pub jwt_ttl_seconds: i64,
     pub max_upload_bytes: usize,
@@ -16,6 +67,8 @@ pub struct Config {
     pub run_migrations: bool,
     pub allow_signups: bool,
     pub cors_allowed_origins: Vec<String>,
+    /// `None` when no identity provider is configured.
+    pub oidc: Option<OidcConfig>,
 }
 
 impl Config {
@@ -62,6 +115,19 @@ impl Config {
             ));
         }
 
+        let integrity_interval_seconds: u64 = parse_env("OAD_INTEGRITY_INTERVAL_SECONDS", 0)?;
+        if integrity_interval_seconds != 0 && integrity_interval_seconds < 60 {
+            return Err(AppError::configuration(
+                "OAD_INTEGRITY_INTERVAL_SECONDS must be 0 (disabled) or at least 60",
+            ));
+        }
+        let integrity_sample_size = parse_env("OAD_INTEGRITY_SAMPLE_SIZE", 250usize)?;
+        if integrity_sample_size == 0 {
+            return Err(AppError::configuration(
+                "OAD_INTEGRITY_SAMPLE_SIZE must be greater than zero",
+            ));
+        }
+
         Ok(Self {
             bind_addr,
             database_url,
@@ -69,6 +135,9 @@ impl Config {
             storage_root: env::var("OAD_STORAGE_ROOT")
                 .unwrap_or_else(|_| "./data/objects".to_string())
                 .into(),
+            storage_backend: parse_storage_backend()?,
+            integrity_interval: Duration::from_secs(integrity_interval_seconds),
+            integrity_sample_size,
             jwt_secret,
             jwt_ttl_seconds,
             max_upload_bytes,
@@ -84,7 +153,84 @@ impl Config {
                         .to_string()
                 }),
             )?,
+            oidc: parse_oidc()?,
         })
+    }
+}
+
+/// Reads the optional OIDC block.
+///
+/// All four core values are required together: a half-configured provider would
+/// otherwise present a Sign in with SSO button that cannot complete.
+fn parse_oidc() -> AppResult<Option<OidcConfig>> {
+    let issuer = match env::var("OAD_OIDC_ISSUER") {
+        Ok(value) if !value.trim().is_empty() => value.trim().trim_end_matches('/').to_string(),
+        _ => return Ok(None),
+    };
+    if !issuer.starts_with("https://") && !issuer.starts_with("http://") {
+        return Err(AppError::configuration(
+            "OAD_OIDC_ISSUER must be an HTTP(S) URL",
+        ));
+    }
+    let required = |key: &str| {
+        env::var(key)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                AppError::configuration(format!("{key} is required when OAD_OIDC_ISSUER is set"))
+            })
+    };
+    let redirect_uri = required("OAD_OIDC_REDIRECT_URI")?;
+    if !redirect_uri.contains("://") {
+        return Err(AppError::configuration(
+            "OAD_OIDC_REDIRECT_URI must be an absolute URI",
+        ));
+    }
+
+    Ok(Some(OidcConfig {
+        issuer,
+        client_id: required("OAD_OIDC_CLIENT_ID")?,
+        client_secret: required("OAD_OIDC_CLIENT_SECRET")?,
+        redirect_uri,
+        extra_scopes: env::var("OAD_OIDC_EXTRA_SCOPES")
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(str::to_string)
+            .collect(),
+        groups_claim: env::var("OAD_OIDC_GROUPS_CLAIM")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        admin_group: env::var("OAD_OIDC_ADMIN_GROUP")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+    }))
+}
+
+fn parse_storage_backend() -> AppResult<StorageBackend> {
+    let kind = env::var("OAD_STORAGE_BACKEND").unwrap_or_else(|_| "local".to_string());
+    match kind.trim().to_ascii_lowercase().as_str() {
+        "local" => Ok(StorageBackend::Local),
+        "s3" => {
+            let bucket = env::var("OAD_S3_BUCKET").map_err(|_| {
+                AppError::configuration("OAD_S3_BUCKET is required when OAD_STORAGE_BACKEND=s3")
+            })?;
+            if bucket.trim().is_empty() {
+                return Err(AppError::configuration("OAD_S3_BUCKET must not be empty"));
+            }
+            Ok(StorageBackend::S3 {
+                bucket,
+                prefix: env::var("OAD_S3_PREFIX").unwrap_or_default(),
+                endpoint_url: env::var("OAD_S3_ENDPOINT_URL")
+                    .ok()
+                    .filter(|v| !v.is_empty()),
+            })
+        }
+        _ => Err(AppError::configuration(
+            "OAD_STORAGE_BACKEND must be local or s3",
+        )),
     }
 }
 

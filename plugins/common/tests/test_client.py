@@ -75,6 +75,11 @@ class BridgeClientTests(unittest.TestCase):
         with self.assertRaises(BridgeError):
             client.status([])
 
+    def test_shelve_and_unshelve_are_pathless_workspace_commands(self):
+        client = BridgeClient(self.root, cli_path=self.cli)
+        self.assertIn("shelve", client.shelve()["args"])
+        self.assertIn("unshelve", client.unshelve()["args"])
+
     def test_uploads_portable_review_proxy_through_cli_protocol(self):
         media = self.root / "shot.glb"
         media.write_bytes(b"glTF")

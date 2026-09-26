@@ -92,7 +92,7 @@ pub async fn list_streams(
             SELECT DISTINCT s.id, s.depot_id, s.name
             FROM streams s
             JOIN depots d ON d.id = s.depot_id
-            LEFT JOIN depot_user_permissions p
+            LEFT JOIN effective_depot_permissions p
               ON p.depot_id = d.id AND p.user_id = $1
             WHERE d.owner_user_id = $1 OR p.role IN ('read', 'write', 'admin')
             ORDER BY s.name

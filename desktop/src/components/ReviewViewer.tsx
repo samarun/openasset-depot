@@ -104,7 +104,11 @@ export function ReviewViewer({
       });
     return () => {
       active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (objectUrl) {
+        const staleObjectUrl = objectUrl;
+        // Three.js may still be unwinding its loader when the review closes.
+        window.setTimeout(() => URL.revokeObjectURL(staleObjectUrl), 1_000);
+      }
     };
   }, [file, loadComments, loadMedia, open]);
 
@@ -324,7 +328,7 @@ interface RenderMediaArgs {
 function renderMedia({ extension, file, media, mediaUrl, videoRef, audioRef, seekRequest, onTimeChange }: RenderMediaArgs) {
   const contentType = media?.contentType ?? "";
   if ((isModel(extension) || isModelContentType(contentType)) && media?.source === "asset") {
-    const playerName = isModel(extension) ? file.name : contentType.includes("fbx") ? "review.fbx" : "review.glb";
+    const playerName = reviewPlayerFileName(file.name, contentType);
     return (
       <Suspense fallback={<div className="review-media-empty">Loading 3D review engine…</div>}>
         <ThreeReviewPlayer
@@ -348,6 +352,14 @@ function renderMedia({ extension, file, media, mediaUrl, videoRef, audioRef, see
     );
   }
   return <img className="review-image" src={mediaUrl} alt={`${file.name} review`} />;
+}
+
+export function reviewPlayerFileName(originalName: string, contentType: string): string {
+  const normalizedType = contentType.split(";", 1)[0].trim().toLowerCase();
+  if (normalizedType === "application/vnd.autodesk.fbx") return "review.fbx";
+  if (normalizedType === "model/gltf+json") return "review.gltf";
+  if (normalizedType === "model/gltf-binary") return "review.glb";
+  return originalName;
 }
 
 function ToolButton({ label, active, onClick, children }: { label: string; active: boolean; onClick: () => void; children: React.ReactNode }) {

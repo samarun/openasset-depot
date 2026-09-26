@@ -2,11 +2,15 @@ import type {
   AdapterDefinition,
   AdapterFileInput,
   AdapterValidationResponse,
+  Collaborator,
   ChangelistResponse,
+  CreateReviewRequestInput,
   CreateWorkspaceInput,
   DeleteWorkspaceResponse,
   Depot,
+  DependencyImpact,
   DependencyScanResult,
+  DiscardShelfResponse,
   ExtractedMetadata,
   FileHistoryEntry,
   FileOperationResponse,
@@ -17,8 +21,13 @@ import type {
   ProjectDetection,
   CreateReviewCommentInput,
   ReviewComment,
+  ReviewRequest,
+  Shelf,
+  ShelfSummary,
   Stream,
   SignupStatus,
+  SsoStart,
+  SsoStatus,
   SubmitResponse,
   SyncPlanEntry,
   UserSession,
@@ -82,6 +91,30 @@ export class OpenAssetApiClient {
 
   signupStatus(): Promise<SignupStatus> {
     return this.request<SignupStatus>("/api/auth/signup");
+  }
+
+  /** Reports whether this server has an identity provider configured. */
+  ssoStatus(): Promise<SsoStatus> {
+    return this.request<SsoStatus>("/api/auth/sso");
+  }
+
+  /** Begins an SSO login and returns the URL to open in a browser. */
+  startSso(): Promise<SsoStart> {
+    return this.request<SsoStart>("/api/auth/sso", { method: "POST" });
+  }
+
+  /** Exchanges the authorization code from the redirect for a session. */
+  async completeSso(code: string, state: string): Promise<UserSession> {
+    const response = await this.request<LoginResponse>("/api/auth/sso/callback", {
+      method: "POST",
+      body: JSON.stringify({ code, state }),
+    });
+    return {
+      token: response.token,
+      username: response.user.username,
+      serverUrl: this.baseUrl,
+      isAdmin: response.user.is_admin,
+    };
   }
 
   signup(username: string, password: string, displayName?: string): Promise<UserAccount> {
@@ -163,6 +196,140 @@ export class OpenAssetApiClient {
       token,
       body: form,
     });
+  }
+
+  /**
+   * Parks a changelist's file content on the server without submitting it.
+   *
+   * Uses the same multipart shape as submit, so a caller that can build a submit
+   * can shelve. Unlike submit this creates no revision and needs no lock.
+   */
+  shelveChangelist(
+    token: string,
+    changelistId: string,
+    uploads: BrowserUpload[],
+  ): Promise<Shelf> {
+    const form = new FormData();
+    for (const upload of uploads) {
+      form.append("file", upload.file, upload.path);
+    }
+    return this.request<Shelf>(`/api/changelists/${changelistId}/shelve`, {
+      method: "POST",
+      token,
+      body: form,
+    });
+  }
+
+  getShelf(token: string, changelistId: string): Promise<Shelf> {
+    return this.request<Shelf>(`/api/changelists/${changelistId}/shelve`, { token });
+  }
+
+  listShelves(token: string, workspaceId: string): Promise<ShelfSummary[]> {
+    const query = new URLSearchParams({ workspace_id: workspaceId });
+    return this.request<ShelfSummary[]>(`/api/shelves?${query}`, { token });
+  }
+
+  unshelveChangelist(token: string, changelistId: string): Promise<Shelf> {
+    return this.request<Shelf>(`/api/changelists/${changelistId}/unshelve`, {
+      method: "POST",
+      token,
+      headers: { "idempotency-key": createUuid() },
+      body: JSON.stringify({}),
+    });
+  }
+
+  discardShelf(token: string, changelistId: string): Promise<DiscardShelfResponse> {
+    return this.request<DiscardShelfResponse>(`/api/changelists/${changelistId}/shelve`, {
+      method: "DELETE",
+      token,
+      headers: { "idempotency-key": createUuid() },
+    });
+  }
+
+  /** Downloads one shelved file's bytes, or `undefined` if the shelf lost it. */
+  async downloadShelfContent(
+    token: string,
+    changelistId: string,
+    path: string,
+  ): Promise<Blob | undefined> {
+    const query = new URLSearchParams({ changelist_id: changelistId, path });
+    const response = await this.fetcher(`${this.baseUrl}/api/shelves/content?${query}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (response.status === 404) return undefined;
+    if (!response.ok) throw new ApiError(`Request failed with ${response.status}`, response.status);
+    return await response.blob();
+  }
+
+  /**
+   * Reports what depends on a file and what it depends on.
+   *
+   * The reverse direction is the one that changes an artist's decision, so this
+   * is fetched when the inspector opens rather than behind a disclosure.
+   */
+  dependencyImpact(token: string, workspaceId: string, path: string): Promise<DependencyImpact> {
+    const query = new URLSearchParams({ workspace_id: workspaceId, path });
+    return this.request<DependencyImpact>(`/api/dependencies/impact?${query}`, { token });
+  }
+
+  listReviewRequests(
+    token: string,
+    workspaceId: string,
+    options: { state?: ReviewRequest["state"]; awaitingMe?: boolean } = {},
+  ): Promise<ReviewRequest[]> {
+    const query = new URLSearchParams({ workspace_id: workspaceId });
+    if (options.state) query.set("state", options.state);
+    if (options.awaitingMe) query.set("awaiting_me", "true");
+    return this.request<ReviewRequest[]>(`/api/reviews/requests?${query}`, { token });
+  }
+
+  createReviewRequest(token: string, input: CreateReviewRequestInput): Promise<ReviewRequest> {
+    return this.request<ReviewRequest>("/api/reviews/requests", {
+      method: "POST",
+      token,
+      headers: { "idempotency-key": createUuid() },
+      body: JSON.stringify({
+        workspace_id: input.workspaceId,
+        path: input.path,
+        revision_number: input.revisionNumber,
+        title: input.title,
+        description: input.description ?? "",
+        reviewers: input.reviewers,
+      }),
+    });
+  }
+
+  decideReviewRequest(
+    token: string,
+    workspaceId: string,
+    requestId: string,
+    decision: "approved" | "changes_requested",
+    note?: string,
+  ): Promise<ReviewRequest> {
+    return this.request<ReviewRequest>(`/api/reviews/requests/${requestId}/decision`, {
+      method: "POST",
+      token,
+      headers: { "idempotency-key": createUuid() },
+      body: JSON.stringify({ workspace_id: workspaceId, decision, note }),
+    });
+  }
+
+  closeReviewRequest(
+    token: string,
+    workspaceId: string,
+    requestId: string,
+  ): Promise<ReviewRequest> {
+    return this.request<ReviewRequest>(`/api/reviews/requests/${requestId}/close`, {
+      method: "POST",
+      token,
+      headers: { "idempotency-key": createUuid() },
+      body: JSON.stringify({ workspace_id: workspaceId }),
+    });
+  }
+
+  /** People who can open this workspace's depot, for assigning reviewers. */
+  listCollaborators(token: string, workspaceId: string): Promise<Collaborator[]> {
+    return this.request<Collaborator[]>(`/api/workspaces/${workspaceId}/collaborators`, { token });
   }
 
   deleteWorkspace(token: string, workspaceId: string): Promise<DeleteWorkspaceResponse> {

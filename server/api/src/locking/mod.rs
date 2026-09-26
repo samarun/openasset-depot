@@ -12,24 +12,39 @@ use crate::{
     api::AppState,
     audit,
     error::{AppError, AppResult},
+    idempotency,
     paths::normalize_depot_path,
     workspaces::workspace_for_user,
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct LockRequest {
     pub workspace_id: Uuid,
     pub path: String,
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct UnlockRequest {
     pub workspace_id: Uuid,
     pub path: String,
 }
 
-#[derive(Debug, Serialize)]
+/// Identifies a lock to break regardless of who holds it.
+///
+/// Either the lock `id` or a `stream_id` plus `path` pair may be supplied, so
+/// an admin can act on a lock listed in the admin view without first resolving
+/// the holder's workspace.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ForceUnlockRequest {
+    pub lock_id: Option<Uuid>,
+    pub stream_id: Option<Uuid>,
+    pub path: Option<String>,
+    /// Recorded in the audit trail so a broken lock is always explainable.
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct LockResponse {
     pub id: Uuid,
     pub stream_id: Uuid,
@@ -67,37 +82,42 @@ pub async fn lock_file(
     let workspace = workspace_for_user(&state.db, req.workspace_id, &user).await?;
     let depot_path = normalize_depot_path(&req.path)?;
 
-    let mut tx = state.db.begin().await?;
-    let row = sqlx::query(
-        r#"
+    let response = idempotency::run(&state.db, &headers, &user, "file_lock", &req, || async {
+        let mut tx = state.db.begin().await?;
+        let row = sqlx::query(
+            r#"
         INSERT INTO locks (stream_id, workspace_id, user_id, depot_path, reason)
         VALUES ($1, $2, $3, $4, $5)
         RETURNING id, stream_id, workspace_id, user_id, depot_path, reason, state, created_at
         "#,
-    )
-    .bind(workspace.stream_id)
-    .bind(workspace.id)
-    .bind(user.user_id)
-    .bind(&depot_path)
-    .bind(req.reason)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(map_lock_conflict)?;
+        )
+        .bind(workspace.stream_id)
+        .bind(workspace.id)
+        .bind(user.user_id)
+        .bind(&depot_path)
+        .bind(req.reason.as_deref())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_lock_conflict)?;
 
-    audit::record_tx(
-        &mut tx,
-        audit::AuditEvent {
-            actor_user_id: Some(user.user_id),
-            stream_id: Some(workspace.stream_id),
-            workspace_id: Some(workspace.id),
-            depot_path: Some(&depot_path),
-            ..audit::AuditEvent::new("file_lock", serde_json::json!({}))
-        },
-    )
+        audit::record_tx(
+            &mut tx,
+            audit::AuditEvent {
+                actor_user_id: Some(user.user_id),
+                stream_id: Some(workspace.stream_id),
+                workspace_id: Some(workspace.id),
+                depot_path: Some(&depot_path),
+                ..audit::AuditEvent::new("file_lock", serde_json::json!({}))
+            },
+        )
+        .await?;
+        tx.commit().await?;
+
+        Ok(lock_response(row))
+    })
     .await?;
-    tx.commit().await?;
 
-    Ok(Json(lock_response(row)))
+    Ok(Json(response))
 }
 
 pub async fn unlock_file(
@@ -108,37 +128,131 @@ pub async fn unlock_file(
     let user = state.require_user(&headers)?;
     let workspace = workspace_for_user(&state.db, req.workspace_id, &user).await?;
     let depot_path = normalize_depot_path(&req.path)?;
-    let mut tx = state.db.begin().await?;
 
-    let row = sqlx::query(
-        r#"
+    let response = idempotency::run(&state.db, &headers, &user, "file_unlock", &req, || async {
+        let mut tx = state.db.begin().await?;
+
+        let row = sqlx::query(
+            r#"
         UPDATE locks
         SET state = 'released', released_at = now()
         WHERE stream_id = $1 AND workspace_id = $2 AND user_id = $3 AND depot_path = $4 AND state = 'active'
         RETURNING id, stream_id, workspace_id, user_id, depot_path, reason, state, created_at
         "#,
-    )
-    .bind(workspace.stream_id)
-    .bind(workspace.id)
-    .bind(user.user_id)
-    .bind(&depot_path)
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or_else(|| AppError::NotFound("active lock not found for user/workspace/path".to_string()))?;
+        )
+        .bind(workspace.stream_id)
+        .bind(workspace.id)
+        .bind(user.user_id)
+        .bind(&depot_path)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| {
+            AppError::NotFound("active lock not found for user/workspace/path".to_string())
+        })?;
 
-    audit::record_tx(
-        &mut tx,
-        audit::AuditEvent {
-            actor_user_id: Some(user.user_id),
-            stream_id: Some(workspace.stream_id),
-            workspace_id: Some(workspace.id),
-            depot_path: Some(&depot_path),
-            ..audit::AuditEvent::new("file_unlock", serde_json::json!({}))
+        audit::record_tx(
+            &mut tx,
+            audit::AuditEvent {
+                actor_user_id: Some(user.user_id),
+                stream_id: Some(workspace.stream_id),
+                workspace_id: Some(workspace.id),
+                depot_path: Some(&depot_path),
+                ..audit::AuditEvent::new("file_unlock", serde_json::json!({}))
+            },
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(lock_response(row))
+    })
+    .await?;
+
+    Ok(Json(response))
+}
+
+/// Releases another user's lock. System admins only.
+///
+/// Deliberately kept out of the artist UI: breaking someone else's exclusive
+/// checkout can strand in-flight work, so it is an administrative action with a
+/// mandatory reason and an audit record naming the original holder.
+pub async fn force_unlock_file(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<ForceUnlockRequest>,
+) -> AppResult<Json<LockResponse>> {
+    let user = state.require_user(&headers)?;
+    if !user.is_admin {
+        return Err(AppError::Forbidden(
+            "only admins can force-unlock a file".to_string(),
+        ));
+    }
+    let reason = req.reason.trim();
+    if reason.is_empty() {
+        return Err(AppError::bad_request(
+            "reason is required when forcing a lock release",
+        ));
+    }
+
+    let depot_path = req.path.as_deref().map(normalize_depot_path).transpose()?;
+    let located_by_id = req.lock_id.is_some();
+    if !located_by_id && (req.stream_id.is_none() || depot_path.is_none()) {
+        return Err(AppError::bad_request(
+            "supply either lock_id, or both stream_id and path",
+        ));
+    }
+
+    let response = idempotency::run(
+        &state.db,
+        &headers,
+        &user,
+        "file_force_unlock",
+        &req,
+        || async {
+            let mut tx = state.db.begin().await?;
+            let row = sqlx::query(
+                r#"
+        UPDATE locks
+        SET state = 'released', released_at = now()
+        WHERE state = 'active'
+          AND (
+            ($1::uuid IS NOT NULL AND id = $1)
+            OR ($1::uuid IS NULL AND stream_id = $2 AND depot_path = $3)
+          )
+        RETURNING id, stream_id, workspace_id, user_id, depot_path, reason, state, created_at
+        "#,
+            )
+            .bind(req.lock_id)
+            .bind(req.stream_id)
+            .bind(depot_path.as_deref())
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or_else(|| AppError::NotFound("active lock not found".to_string()))?;
+
+            let response = lock_response(row);
+            audit::record_tx(
+                &mut tx,
+                audit::AuditEvent {
+                    actor_user_id: Some(user.user_id),
+                    stream_id: Some(response.stream_id),
+                    workspace_id: Some(response.workspace_id),
+                    depot_path: Some(&response.depot_path),
+                    ..audit::AuditEvent::new(
+                        "file_force_unlock",
+                        serde_json::json!({
+                            "lock_id": response.id,
+                            "previous_holder_user_id": response.user_id,
+                            "reason": reason,
+                        }),
+                    )
+                },
+            )
+            .await?;
+            tx.commit().await?;
+            Ok(response)
         },
     )
     .await?;
-    tx.commit().await?;
-    Ok(Json(lock_response(row)))
+
+    Ok(Json(response))
 }
 
 pub async fn list_locks(
@@ -166,7 +280,7 @@ pub async fn list_locks(
             FROM locks l
             JOIN streams s ON s.id = l.stream_id
             JOIN depots d ON d.id = s.depot_id
-            LEFT JOIN depot_user_permissions p
+            LEFT JOIN effective_depot_permissions p
               ON p.depot_id = d.id AND p.user_id = $1
             WHERE l.state = 'active'
               AND (d.owner_user_id = $1 OR p.role IN ('read', 'write', 'admin'))
@@ -224,7 +338,7 @@ pub async fn list_locks_page(
             FROM locks l
             JOIN streams s ON s.id = l.stream_id
             JOIN depots d ON d.id = s.depot_id
-            LEFT JOIN depot_user_permissions p
+            LEFT JOIN effective_depot_permissions p
               ON p.depot_id = d.id AND p.user_id = $1
             WHERE l.state = 'active'
               AND (d.owner_user_id = $1 OR p.role IN ('read', 'write', 'admin'))

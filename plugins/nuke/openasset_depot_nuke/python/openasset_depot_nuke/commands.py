@@ -3,10 +3,11 @@ from __future__ import annotations
 import nuke
 
 from . import runtime
-from .bridge_loader import load_bridge
+from .bridge_loader import load_bridge, load_words
 
 
 _, BridgeError, _ = load_bridge()
+_words = load_words()
 _busy = False
 
 
@@ -14,7 +15,7 @@ def refresh() -> None:
     _with_script(
         lambda bridge, path: bridge.status([path]),
         lambda values: _status_message(values[0]),
-        "Refreshing status",
+        _words.progress_for("refresh"),
     )
 
 
@@ -29,7 +30,7 @@ def checkout() -> None:
     _with_script(
         lambda bridge, path: bridge.checkout(path, "Editing in Nuke"),
         lambda result: f"Checked out {result['path']}",
-        "Checking out script",
+        _words.progress_for("checkout", "script"),
     )
 
 
@@ -37,7 +38,7 @@ def sync() -> None:
     _with_script(
         lambda bridge, _path: bridge.sync(timeout_seconds=1800),
         lambda result: f"Synced {result.get('synced_count', 0)} file(s)",
-        "Syncing latest files",
+        _words.progress_for("sync"),
     )
 
 
@@ -45,21 +46,37 @@ def validate() -> None:
     _with_script(
         lambda bridge, path: bridge.validate([path], "Nuke"),
         _validation_message,
-        "Validating script",
+        _words.progress_for("validate"),
     )
 
 
 def submit(description: str = "") -> None:
     description = description.strip()
     if not description:
-        description = nuke.getInput("Submit description", "Nuke script update") or ""
+        description = nuke.getInput(_words.FIELDS["description"], "Nuke script update") or ""
     if not description.strip():
-        _set_status("Enter a submit description.")
+        _set_status(_words.MESSAGES["need_description"])
         return
     _with_script(
         lambda bridge, _path: bridge.submit(description.strip(), timeout_seconds=1800),
         lambda result: f"Submitted {len(result.get('revisions', []))} file(s)",
-        "Submitting changes",
+        _words.progress_for("submit"),
+    )
+
+
+def shelve() -> None:
+    _with_script(
+        lambda bridge, _path: bridge.shelve(timeout_seconds=1800),
+        lambda result: f"Shelved {len(result.get('files', []))} file(s)",
+        _words.progress_for("shelve"),
+    )
+
+
+def unshelve() -> None:
+    _with_script(
+        lambda bridge, _path: bridge.unshelve(timeout_seconds=1800),
+        lambda result: f"Restored {result.get('restored_count', 0)} file(s)",
+        _words.progress_for("unshelve"),
     )
 
 
@@ -68,8 +85,8 @@ def revert() -> None:
         return
     _with_script(
         lambda bridge, path: bridge.revert(path),
-        lambda result: f"Reverted checkout for {result['path']}",
-        "Reverting checkout",
+        lambda result: f"Reverted {result['path']}",
+        _words.progress_for("revert"),
     )
 
 
@@ -85,7 +102,7 @@ def _with_script(operation, success, label) -> None:
 def _run(operation, success, label) -> None:
     global _busy
     if _busy:
-        _set_status("Another OpenAsset operation is already running.")
+        _set_status(f"Another {_words.SHORT_NAME} operation is already running.")
         return
     _busy = True
     _set_panel_busy(True)
@@ -129,7 +146,7 @@ def _set_status(message: str) -> None:
     if panel is not None:
         panel.set_status(message)
     else:
-        nuke.tprint(f"OpenAsset Depot: {message}")
+        nuke.tprint(f"{_words.PRODUCT_NAME}: {message}")
 
 
 def _set_panel_busy(busy: bool) -> None:
@@ -141,14 +158,7 @@ def _set_panel_busy(busy: bool) -> None:
 
 
 def _status_message(status) -> str:
-    values = [status.local_state.replace("_", " ").title()]
-    if status.needs_sync:
-        values.append("Needs Sync")
-    if status.lock_state == "mine":
-        values.append("Checked Out by Me")
-    elif status.lock_state == "other":
-        values.append("Checked Out Elsewhere")
-    return " | ".join(values)
+    return _words.status_from_bridge(status)
 
 
 def _validation_message(result) -> str:

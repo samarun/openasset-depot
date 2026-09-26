@@ -20,14 +20,28 @@ namespace OpenAssetDepot.Unity
             EditorApplication.RepaintProjectWindow();
         }
 
+        // Mirrors the palette in plugins/common/openasset_depot_bridge/theme.py,
+        // so a project-window dot is the colour the panels use for that status.
+        private static readonly Color InUse = Hex(0xef, 0x8a, 0x85);
+        private static readonly Color CheckedOut = Hex(0x7b, 0xd0, 0xc4);
+        private static readonly Color NeedsSync = Hex(0xe0, 0xb1, 0x5e);
+        private static readonly Color UpToDate = Hex(0x80, 0xc9, 0x9a);
+        private static readonly Color Untracked = Hex(0xae, 0xae, 0xb2);
+
+        private static Color Hex(byte red, byte green, byte blue)
+        {
+            return new Color(red / 255f, green / 255f, blue / 255f);
+        }
+
         private static void Draw(string guid, Rect rect)
         {
             var path = AssetDatabase.GUIDToAssetPath(guid);
             if (!Statuses.TryGetValue(path, out var status)) return;
-            var color = status.lock_state == "other" ? new Color(0.82f, 0.35f, 0.31f)
-                : status.lock_state == "mine" ? new Color(0.26f, 0.67f, 0.58f)
-                : status.needs_sync ? new Color(0.86f, 0.65f, 0.24f)
-                : new Color(0.43f, 0.61f, 0.78f);
+            var color = status.lock_state == "other" ? InUse
+                : status.lock_state == "mine" ? CheckedOut
+                : status.needs_sync ? NeedsSync
+                : status.local_state == "untracked" ? Untracked
+                : UpToDate;
             var dot = new Rect(rect.xMax - 9, rect.y + (rect.height - 6) * 0.5f, 6, 6);
             EditorGUI.DrawRect(dot, color);
         }

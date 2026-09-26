@@ -6,20 +6,27 @@ import {
   CloudCog,
   Eye,
   Fingerprint,
+  KeyRound,
   LogIn,
   ShieldCheck,
   Sparkles,
   UserPlus,
 } from "lucide-react";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { friendlyApiError, OpenAssetApiClient } from "../api/client";
-import type { SignupStatus, UserSession } from "../types/domain";
+import { isNativeDesktop } from "../native/workspaces";
+import { signInWithSso } from "../native/sso";
+import type { SignupStatus, SsoStatus, UserSession } from "../types/domain";
 
 interface LoginProps {
   onLogin: (session: UserSession) => void;
 }
 
 type AuthMode = "login" | "signup";
+type ServerReachability = "checking" | "reachable" | "unreachable";
+
+/** Let the artist finish typing a server URL before probing it. */
+const REACHABILITY_DEBOUNCE_MS = 450;
 
 export function Login({ onLogin }: LoginProps) {
   const [serverUrl, setServerUrl] = useState(readInitialServerUrl);
@@ -32,6 +39,64 @@ export function Login({ onLogin }: LoginProps) {
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [checkingSignup, setCheckingSignup] = useState(false);
+  const [reachability, setReachability] = useState<ServerReachability>("checking");
+  const [sso, setSso] = useState<SsoStatus>();
+
+  useEffect(() => {
+    let cancelled = false;
+    setReachability("checking");
+    const timer = window.setTimeout(() => {
+      void new OpenAssetApiClient(serverUrl)
+        .ready()
+        .then(() => {
+          if (!cancelled) setReachability("reachable");
+        })
+        .catch(() => {
+          if (!cancelled) setReachability("unreachable");
+        });
+    }, REACHABILITY_DEBOUNCE_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [serverUrl]);
+
+  // Asked per server: SSO is a deployment choice, so the button only appears
+  // when this server actually has an identity provider configured.
+  useEffect(() => {
+    if (reachability !== "reachable") {
+      setSso(undefined);
+      return;
+    }
+    let cancelled = false;
+    void new OpenAssetApiClient(serverUrl)
+      .ssoStatus()
+      .then((status) => {
+        if (!cancelled) setSso(status);
+      })
+      .catch(() => {
+        if (!cancelled) setSso(undefined);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [reachability, serverUrl]);
+
+  async function submitSso() {
+    setLoading(true);
+    setError(undefined);
+    try {
+      const session = await signInWithSso(new OpenAssetApiClient(serverUrl));
+      sessionStorage.setItem("oad.session", JSON.stringify(session));
+      localStorage.setItem("oad.serverUrl", serverUrl);
+      onLogin(session);
+    } catch (ssoError) {
+      setError(friendlyApiError(ssoError));
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function selectMode(nextMode: AuthMode) {
     setMode(nextMode);
@@ -85,6 +150,13 @@ export function Login({ onLogin }: LoginProps) {
   }
 
   const signupDisabled = mode === "signup" && (!signupStatus?.enabled || checkingSignup);
+  // Only a confirmed failure blocks the form. A probe still in flight must not
+  // make the button feel stuck, and a proxy that hides /ready should not lock
+  // an artist out of a server that otherwise works.
+  const submitDisabled = loading || signupDisabled || reachability === "unreachable";
+  // The browser build has nowhere to catch the provider's redirect, so it only
+  // offers the password form even against an SSO-enabled server.
+  const ssoAvailable = mode === "login" && Boolean(sso?.enabled) && isNativeDesktop();
 
   return (
     <main className="login-shell">
@@ -135,6 +207,14 @@ export function Login({ onLogin }: LoginProps) {
               Server
               <input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} required />
             </label>
+            <p className={`server-reachability is-${reachability}`} role="status" aria-live="polite">
+              <span className="server-reachability-dot" aria-hidden="true" />
+              {reachability === "checking"
+                ? "Checking server…"
+                : reachability === "reachable"
+                  ? "Server reachable"
+                  : "Cannot reach this server"}
+            </p>
             {mode === "signup" && (
               <label>
                 Display name
@@ -187,11 +267,24 @@ export function Login({ onLogin }: LoginProps) {
               </div>
             )}
             {error && <p className="form-error">{error}</p>}
-            <button className="primary-button fill-button auth-submit" type="submit" disabled={loading || signupDisabled}>
+            <button className="primary-button fill-button auth-submit" type="submit" disabled={submitDisabled}>
               {mode === "login" ? <LogIn size={17} /> : <UserPlus size={17} />}
               {loading ? "Working…" : mode === "login" ? "Enter workspace" : "Create account"}
               {!loading && <ArrowRight size={17} />}
             </button>
+            {ssoAvailable && (
+              <>
+                <p className="auth-divider" aria-hidden="true"><span>or</span></p>
+                <button
+                  className="secondary-button fill-button"
+                  type="button"
+                  onClick={() => void submitSso()}
+                  disabled={loading}
+                >
+                  <KeyRound size={17} /> Continue with {sso?.provider ?? "single sign-on"}
+                </button>
+              </>
+            )}
             {import.meta.env.DEV && (
               <button className="secondary-button fill-button" type="button" onClick={previewMockUi}>
                 <Eye size={17} /> Preview Demo Mode

@@ -2,13 +2,19 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockFiles } from "../data/mockData";
 import type { ReviewComment } from "../types/domain";
-import { ReviewViewer } from "./ReviewViewer";
+import { ReviewViewer, reviewPlayerFileName } from "./ReviewViewer";
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe("ReviewViewer", () => {
+  it("uses the served proxy type when an FBX revision has a GLB review proxy", () => {
+    expect(reviewPlayerFileName("AnimatedHero.fbx", "model/gltf-binary")).toBe("review.glb");
+    expect(reviewPlayerFileName("AnimatedHero.glb", "application/vnd.autodesk.fbx")).toBe("review.fbx");
+    expect(reviewPlayerFileName("AnimatedHero.glb", "application/octet-stream")).toBe("AnimatedHero.glb");
+  });
+
   it("opens revision feedback and posts a comment", async () => {
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:review") });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });

@@ -16,6 +16,8 @@ PLUGINS = ROOT / "plugins"
 OUTPUT = ROOT / "dist" / "integrations"
 COMMON_PYTHON = PLUGINS / "common" / "openasset_depot_bridge"
 COMMON_NODE = PLUGINS / "common" / "node" / "openasset-cli.js"
+COMMON_WORDS = PLUGINS / "common" / "node" / "words.js"
+COMMON_PANEL_CSS = PLUGINS / "common" / "visual-kit" / "panel.css"
 EXCLUDED_PARTS = {"__pycache__", ".DS_Store"}
 VERSION = "0.1.2"
 
@@ -102,12 +104,20 @@ def zip_source(name: str, source: Path) -> Path:
     return target
 
 
+def add_shared_web_kit(archive: zipfile.ZipFile, prefix: str) -> None:
+    """Embeds the files the HTML panels share instead of duplicating."""
+
+    archive.write(COMMON_NODE, f"{prefix}/lib/openasset-cli.js")
+    archive.write(COMMON_WORDS, f"{prefix}/lib/words.js")
+    archive.write(COMMON_PANEL_CSS, f"{prefix}/lib/panel.css")
+
+
 def zip_adobe() -> Path:
     target = OUTPUT / f"openasset-depot-adobe-cep-{VERSION}.zip"
     source = PLUGINS / "adobe" / "OpenAssetDepotCEP"
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
         add_tree(archive, source, "com.openassetdepot.creativecloud")
-        archive.write(COMMON_NODE, "com.openassetdepot.creativecloud/lib/openasset-cli.js")
+        add_shared_web_kit(archive, "com.openassetdepot.creativecloud")
     return target
 
 
@@ -116,7 +126,7 @@ def zip_resolve() -> Path:
     source = PLUGINS / "resolve" / "OpenAssetDepotResolve"
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
         add_tree(archive, source, "com.openassetdepot.resolve")
-        archive.write(COMMON_NODE, "com.openassetdepot.resolve/lib/openasset-cli.js")
+        add_shared_web_kit(archive, "com.openassetdepot.resolve")
     return target
 
 

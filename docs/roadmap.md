@@ -2,8 +2,9 @@
 
 ## Recently Completed Foundation
 
-- Production navigation hides Reviews, Stage, and shelving until their backend
-  contracts exist; global admin claims now gate Admin navigation.
+- Production navigation includes Shelves and Reviews now that their backend
+  contracts exist; Stage orchestration remains hidden. Global admin claims
+  still gate Admin navigation.
 - Artist statuses use eight server-backed labels, and demo/offline state remains
   visibly distinct from connected data.
 - Sync and submit support additive CLI integration protocol v2 progress streamed
@@ -13,29 +14,62 @@
   drawer, and first-admin studio onboarding are in the desktop app.
 - Ubuntu production Compose keeps data services private and terminates automatic
   HTTPS at Caddy.
+- Group-based depot permissions resolve through `effective_depot_permissions`,
+  and OIDC single sign-on provisions accounts and syncs group membership.
+- Every mutating JSON endpoint accepts `Idempotency-Key`; multipart submit
+  retries compare uploaded content and replay the original revisions.
+- Uploads and downloads resume: chunked upload sessions with offset tracking on
+  the server, `Range` requests on read, and CLI resume on both directions.
+- S3-compatible object storage sits behind the same storage trait as the local
+  filesystem, selected by `OAD_STORAGE_BACKEND` and built with the `s3` feature.
+- Integrity verification runs on a schedule alongside the manual endpoint, and
+  admins can force-unlock a file with a mandatory reason and an audit record
+  naming the previous holder.
+- Pending work can be shelved and restored without creating a revision.
+- Review requests assign named reviewers to an immutable revision; the inspector
+  reports dependency impact in both directions.
+- The browser review runtime is verified with Blender-authored animated GLB and
+  FBX assets: direct playback, a GLB proxy attached to an FBX revision,
+  timecoded comments, annotation persistence, and comment-to-frame seeking all
+  pass against the real API. See [review runtime verification](review-runtime-verification.md).
 
 ## Next Production Hardening
 
-- Add group-based and stream-specific permissions.
-- Extend `Idempotency-Key` records to every remaining mutating JSON endpoint;
-  multipart submit retries already compare content and replay original revisions.
-- Add scheduled execution around the existing integrity verification and manual,
-  race-safe orphan cleanup endpoints.
-- Add S3-compatible object storage with multipart upload support.
 - Add admin repair/report export workflows for failed storage verification.
+- Extend integrity sweeps from recent-blob sampling to full coverage over time,
+  so old blobs cannot go indefinitely unverified.
+- Add orphan cleanup for S3 deployments, which currently rely on bucket
+  lifecycle rules; cleanup only walks the local filesystem today.
+- Add lock lease expiration so abandoned checkouts release without an admin.
+- Let the browser build complete single sign-on, and let an existing password
+  account link to an SSO identity instead of colliding with it.
+- Auto-provision depot roles from identity-provider groups; membership syncs
+  today, but an admin must still create the group and grant its permissions.
+- Route browser uploads through the resumable upload session API; only the CLI
+  and native desktop paths use it today.
+- Route review-proxy uploads through the same streamed, resumable path. The
+  current endpoint accepts at most 512 MiB but buffers that request in memory.
+- Store source frame-rate and timebase metadata with each review proxy. The
+  current 3D review UI labels frames at 24 fps even when the source was authored
+  at a different rate.
+- Add committed browser GPU tests with small licensed fixtures for GLB, glTF,
+  and FBX, including a canvas-pixel assertion and proxy-decoder regression.
 
 ## Scale And Workflow
 
 - Add Merkle-style local workspace comparison for faster explicit full-status
   scans; server sync planning is already revision-acknowledgement based.
-- Add recursive dependency sync and impact analysis on `asset_dependency_edges`.
-- Add shelves, code/asset review workflows, and stream merge/copy operations.
-- Add admin force unlock with audit trail and optional lease expiration.
-- Add resumable large-file upload/download.
+- Add recursive dependency sync on `asset_dependency_edges`.
+- Add stream merge/copy operations and stage orchestration.
+- Add review comparison modes (A/B, wipe, onion skin), threaded replies and
+  mentions, and a studio preview-generation queue for formats browsers cannot
+  decode directly, including USD, Alembic, EXR sequences, and DCC-native scenes.
 
 ## Tooling
 
-- Add licensed host automation matrices and host-specific dependency extractors
-  to the existing Unreal, Unity, Blender, Maya, Houdini, Nuke, Adobe, and Resolve integrations.
+- Add host-specific dependency extractors to the existing Unreal, Unity,
+  Blender, Maya, Houdini, Nuke, Adobe, and Resolve integrations. Licensed Maya,
+  Houdini, and Nuke smoke tests already run on self-hosted runners when
+  `OAD_LICENSED_HOST_RUNNERS` is set; Blender runs on every push.
 - Publish versioned Rust and TypeScript SDK packages.
 - Publish signed/notarized desktop and host artifacts from release CI.

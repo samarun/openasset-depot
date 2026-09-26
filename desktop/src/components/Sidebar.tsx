@@ -4,7 +4,9 @@ import {
   Clock,
   FolderKanban,
   Home,
+  Inbox,
   LockKeyhole,
+  MessageCircle,
   Settings,
   Shield,
 } from "lucide-react";
@@ -23,6 +25,8 @@ const artistItems: Array<{ key: ViewKey; label: string; icon: typeof Home }> = [
   { key: "home", label: "My Work", icon: Home },
   { key: "workspace", label: "Assets", icon: FolderKanban },
   { key: "changes", label: "Changes", icon: ClipboardList },
+  { key: "shelves", label: "Shelves", icon: Inbox },
+  { key: "reviews", label: "Reviews", icon: MessageCircle },
   { key: "locks", label: "Locks", icon: LockKeyhole },
 ];
 

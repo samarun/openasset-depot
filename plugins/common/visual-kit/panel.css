@@ -1,0 +1,314 @@
+/*
+ * Shared panel styling for the HTML-based host integrations (Adobe CEP and
+ * DaVinci Resolve).
+ *
+ * Both panels previously carried their own near-identical stylesheet, which had
+ * already diverged: different greys, different accent colours, and a different
+ * button height, so the same product looked like two products depending on which
+ * host it was docked in. Hosts that need a genuine difference override a token
+ * below rather than forking the whole sheet.
+ *
+ * Tokens mirror desktop/src/design-tokens.css. The palette is the dark theme
+ * because both hosts are dark by default and a light panel inside them reads as
+ * a rendering bug.
+ */
+
+:root {
+  color-scheme: dark;
+
+  --oad-bg: #1c1c1e;
+  --oad-surface: #242426;
+  --oad-surface-soft: #2c2c2e;
+  --oad-surface-strong: #37373a;
+  --oad-text: #f5f5f7;
+  --oad-muted: #aeaeb2;
+  --oad-text-tertiary: #727278;
+  --oad-line: #3d3d40;
+  --oad-primary: #7bd0c4;
+  --oad-primary-strong: #9fe3da;
+  --oad-primary-deep: #087f73;
+  --oad-green: #80c99a;
+  --oad-amber: #e0b15e;
+  --oad-red: #ef8a85;
+
+  --oad-space-1: 4px;
+  --oad-space-2: 8px;
+  --oad-space-3: 12px;
+  --oad-space-4: 16px;
+  --oad-space-5: 20px;
+  --oad-radius-sm: 6px;
+  --oad-radius: 8px;
+
+  --oad-text-title: 17px;
+  --oad-text-lead: 15px;
+  --oad-text-body: 13px;
+  --oad-text-label: 12px;
+  --oad-text-caption: 11px;
+  --oad-text-micro: 10px;
+  --oad-weight-regular: 450;
+  --oad-weight-strong: 600;
+
+  --oad-motion: 120ms;
+  --oad-ease: cubic-bezier(0.2, 0, 0, 1);
+
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  font-size: var(--oad-text-body);
+  color: var(--oad-text);
+  background: var(--oad-bg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --oad-motion: 1ms;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--oad-bg);
+}
+
+main {
+  min-height: 100vh;
+  padding: var(--oad-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--oad-space-4);
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: var(--oad-text-lead);
+  font-weight: var(--oad-weight-strong);
+}
+
+h2 {
+  font-size: var(--oad-text-title);
+  font-weight: var(--oad-weight-strong);
+  /* Depot paths and asset names have no spaces to break on. */
+  overflow-wrap: anywhere;
+}
+
+header {
+  display: grid;
+  grid-template-columns: 34px 1fr 32px;
+  align-items: center;
+  gap: var(--oad-space-3);
+}
+
+header p {
+  color: var(--oad-muted);
+  font-size: var(--oad-text-caption);
+  margin-top: 2px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.mark {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--oad-line);
+  border-radius: var(--oad-radius-sm);
+  font-size: var(--oad-text-caption);
+  font-weight: var(--oad-weight-strong);
+  color: var(--oad-primary);
+}
+
+.eyebrow {
+  color: var(--oad-text-tertiary);
+  font-size: var(--oad-text-micro);
+  font-weight: var(--oad-weight-strong);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: var(--oad-space-2);
+}
+
+/* The selected asset block. Named twice because the two hosts landed on
+   different class names before this sheet existed. */
+.asset,
+.selection {
+  padding: var(--oad-space-5) 0;
+  border-block: 1px solid var(--oad-line);
+}
+
+.asset p,
+.selection p {
+  color: var(--oad-muted);
+  font-size: var(--oad-text-caption);
+  margin-top: var(--oad-space-1);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  margin-top: var(--oad-space-3);
+  padding: 5px var(--oad-space-2);
+  border: 1px solid var(--oad-line);
+  border-radius: var(--oad-radius-sm);
+  color: var(--oad-muted);
+  font-size: var(--oad-text-caption);
+  font-weight: var(--oad-weight-strong);
+}
+
+.status.good {
+  color: var(--oad-green);
+  border-color: color-mix(in srgb, var(--oad-green) 45%, transparent);
+}
+
+.status.warn {
+  color: var(--oad-amber);
+  border-color: color-mix(in srgb, var(--oad-amber) 45%, transparent);
+}
+
+.status.bad {
+  color: var(--oad-red);
+  border-color: color-mix(in srgb, var(--oad-red) 45%, transparent);
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--oad-space-2);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  min-height: 34px;
+  padding: 7px var(--oad-space-3);
+  border: 1px solid var(--oad-line);
+  border-radius: var(--oad-radius-sm);
+  background: var(--oad-surface-soft);
+  color: var(--oad-text);
+  font-weight: var(--oad-weight-regular);
+  cursor: pointer;
+  transition: background var(--oad-motion) var(--oad-ease);
+}
+
+button:hover:not(:disabled) {
+  background: var(--oad-surface-strong);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--oad-primary);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+button.primary {
+  background: var(--oad-primary);
+  border-color: var(--oad-primary);
+  color: #10201e;
+  font-weight: var(--oad-weight-strong);
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--oad-primary-strong);
+  border-color: var(--oad-primary-strong);
+}
+
+button.icon {
+  min-height: 30px;
+  padding: 0;
+  font-size: var(--oad-text-title);
+}
+
+button.link {
+  min-height: auto;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--oad-muted);
+  text-align: left;
+  text-decoration: underline;
+}
+
+label {
+  display: grid;
+  gap: var(--oad-space-1);
+  color: var(--oad-muted);
+  font-size: var(--oad-text-label);
+}
+
+input,
+textarea {
+  width: 100%;
+  padding: 9px;
+  border: 1px solid var(--oad-line);
+  border-radius: var(--oad-radius-sm);
+  background: var(--oad-bg);
+  color: var(--oad-text);
+  resize: vertical;
+}
+
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--oad-primary);
+  outline-offset: -1px;
+}
+
+.submit,
+.setup {
+  display: grid;
+  gap: var(--oad-space-3);
+}
+
+.setup {
+  padding: var(--oad-space-4);
+  border: 1px solid var(--oad-line);
+  border-radius: var(--oad-radius);
+  background: var(--oad-surface);
+}
+
+.setup h2 {
+  font-size: var(--oad-text-lead);
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--oad-space-2);
+}
+
+footer {
+  margin-top: auto;
+  padding-top: var(--oad-space-3);
+  border-top: 1px solid var(--oad-line);
+  display: flex;
+  justify-content: space-between;
+  gap: var(--oad-space-3);
+  color: var(--oad-text-tertiary);
+  font-size: var(--oad-text-micro);
+}
+
+#message {
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.hidden {
+  display: none;
+}

@@ -17,9 +17,10 @@ cp "$SOURCE_DIR/main.js" "$DESTINATION/main.js"
 cp "$SOURCE_DIR/preload.js" "$DESTINATION/preload.js"
 cp "$SOURCE_DIR/index.html" "$DESTINATION/index.html"
 cp "$SOURCE_DIR/renderer.js" "$DESTINATION/renderer.js"
-cp "$SOURCE_DIR/styles.css" "$DESTINATION/styles.css"
 cp "$SDK_NODE" "$DESTINATION/WorkflowIntegration.node"
 cp "$SOURCE_DIR/../../common/node/openasset-cli.js" "$DESTINATION/lib/openasset-cli.js"
+cp "$SOURCE_DIR/../../common/node/words.js" "$DESTINATION/lib/words.js"
+cp "$SOURCE_DIR/../../common/visual-kit/panel.css" "$DESTINATION/lib/panel.css"
 
 printf 'Installed OpenAsset Depot Resolve integration at %s\n' "$DESTINATION"
 printf 'Restart Resolve Studio, then open Workspace > Workflow Integrations > OpenAsset Depot.\n'

@@ -1,10 +1,13 @@
 import { ChevronDown, Command, FolderGit2, LogOut, Moon, Search, Sun } from "lucide-react";
+import type { PrimaryAction } from "../data/primaryAction";
 import type { UserSession, Workspace } from "../types/domain";
 
 interface TopBarProps {
   session: UserSession;
   workspace?: Workspace;
   theme: "light" | "dark";
+  primaryAction?: PrimaryAction;
+  primaryActionBusy?: boolean;
   onOpenPalette: () => void;
   onToggleTheme: () => void;
   onSwitchWorkspace: () => void;
@@ -15,11 +18,14 @@ export function TopBar({
   session,
   workspace,
   theme,
+  primaryAction,
+  primaryActionBusy = false,
   onOpenPalette,
   onToggleTheme,
   onSwitchWorkspace,
   onLogout,
 }: TopBarProps) {
+  const PrimaryIcon = primaryAction?.icon;
   return (
     <header className="topbar">
       <button className="search-trigger" type="button" onClick={onOpenPalette}>
@@ -30,6 +36,17 @@ export function TopBar({
         </kbd>
       </button>
       <div className="topbar-right">
+        {primaryAction && PrimaryIcon && (
+          <button
+            className="primary-button topbar-primary"
+            type="button"
+            onClick={primaryAction.run}
+            disabled={primaryActionBusy}
+          >
+            <PrimaryIcon size={16} />
+            <span>{primaryAction.label}</span>
+          </button>
+        )}
         <button className="workspace-chip" type="button" onClick={onSwitchWorkspace}>
           <FolderGit2 size={15} />
           {workspace?.name ?? "No workspace"}

@@ -1,6 +1,6 @@
 import { Box, Clapperboard, FileImage, FileText, Music2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { CSSProperties } from "react";
+import { previewPatternClass, previewSignatureStyle } from "../data/previewSignature";
 import type { AssetFile } from "../types/domain";
 import { AssetPreview } from "./AssetPreview";
 import { StatusBadge } from "./StatusBadge";
@@ -23,11 +23,7 @@ const PREVIEW_ICONS: Record<AssetFile["previewTone"], LucideIcon> = {
 export function AssetCard({ file, onSelect, selected = false, loadPreview }: AssetCardProps) {
   const PreviewIcon = PREVIEW_ICONS[file.previewTone];
   const extension = file.name.includes(".") ? file.name.split(".").pop()?.toUpperCase() : "ASSET";
-  const hue = stableHue(file.path);
-  const previewStyle = {
-    "--preview-hue": hue,
-    "--preview-rotation": `${(hue % 24) - 12}deg`,
-  } as CSSProperties;
+  const previewStyle = previewSignatureStyle(file.path);
 
   return (
     <button
@@ -38,7 +34,7 @@ export function AssetCard({ file, onSelect, selected = false, loadPreview }: Ass
     >
       <AssetPreview
         file={file}
-        className={`asset-preview asset-preview-${file.previewTone}`}
+        className={`asset-preview asset-preview-${file.previewTone} ${previewPatternClass(file.path)}`}
         style={previewStyle}
         loadPreview={loadPreview}
         fallback={(
@@ -58,10 +54,4 @@ export function AssetCard({ file, onSelect, selected = false, loadPreview }: Ass
       </span>
     </button>
   );
-}
-
-function stableHue(value: string): number {
-  let hash = 0;
-  for (const character of value) hash = (hash * 31 + character.charCodeAt(0)) | 0;
-  return Math.abs(hash) % 360;
 }

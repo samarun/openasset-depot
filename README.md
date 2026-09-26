@@ -48,6 +48,10 @@ rules stay on the server; host plug-ins use the stable `oad integration` protoco
 
 ![OpenAsset Depot creative review studio](docs/screenshots/review.png)
 
+Animated GLB and FBX playback, an FBX revision using a GLB proxy, persisted
+annotations, and timecoded seek are covered by the documented
+[review runtime verification](docs/review-runtime-verification.md).
+
 ### Submit validation
 
 ![OpenAsset Depot submit workflow](docs/screenshots/submit.png)
@@ -181,6 +185,8 @@ the required Apple signing/notarization secrets are absent.
 - [Administrator and artist user guide](docs/user-guide.md)
 - [Getting started](docs/getting-started.md)
 - [Host integrations](docs/integrations.md)
+- [Testing the host integrations](docs/host-ci.md)
+- [Glossary](docs/glossary.md)
 - [Architecture](docs/architecture.md)
 - [REST API](docs/api.md)
 - [CLI](docs/cli.md)

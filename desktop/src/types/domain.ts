@@ -2,6 +2,8 @@ export type ViewKey =
   | "home"
   | "workspace"
   | "changes"
+  | "shelves"
+  | "reviews"
   | "locks"
   | "admin"
   | "settings"
@@ -29,6 +31,17 @@ export interface UserSession {
 export interface SignupStatus {
   enabled: boolean;
   first_user: boolean;
+}
+
+export interface SsoStatus {
+  enabled: boolean;
+  /** Provider host, used to label the button without hard-coding a vendor. */
+  provider?: string | null;
+}
+
+export interface SsoStart {
+  authorization_url: string;
+  state: string;
 }
 
 export interface UserAccount {
@@ -253,6 +266,102 @@ export interface AssetDependency {
   dependency_status: "present" | "missing" | "external" | "unknown";
   adapter_name: string;
   confidence: number;
+}
+
+export interface DependencyImpactEdge {
+  /** The other file in the relationship, whichever direction it was reported for. */
+  path: string;
+  dependency_type: AssetDependency["dependency_type"];
+  dependency_status: AssetDependency["dependency_status"];
+  adapter_name: string;
+  confidence: number;
+  scan_time: string;
+  in_depot: boolean;
+}
+
+export interface DependencyImpact {
+  path: string;
+  /** Files that reference this one, so changing it can break them. */
+  required_by: DependencyImpactEdge[];
+  /** Files this one references and needs present to open cleanly. */
+  depends_on: DependencyImpactEdge[];
+  required_by_count: number;
+  depends_on_count: number;
+  missing_count: number;
+  truncated: boolean;
+  /** `null` means the graph has never seen this file, not that it has no links. */
+  last_scanned_at: string | null;
+}
+
+export interface ShelvedFile {
+  path: string;
+  blob_hash: string;
+  size_bytes: number;
+  action: "add" | "edit";
+  created_at: string;
+}
+
+export interface Shelf {
+  changelist_id: string;
+  workspace_id: string;
+  user_id: string;
+  files: ShelvedFile[];
+}
+
+export interface ShelfSummary {
+  changelist_id: string;
+  description: string;
+  changelist_status: string;
+  user_id: string;
+  owner: string;
+  file_count: number;
+  total_bytes: number;
+  shelved_at: string;
+}
+
+export interface DiscardShelfResponse {
+  changelist_id: string;
+  discarded: number;
+}
+
+export interface ReviewerDecision {
+  reviewer_user_id: string;
+  reviewer: string;
+  decision: "pending" | "approved" | "changes_requested";
+  note: string | null;
+  decided_at: string | null;
+}
+
+export interface ReviewRequest {
+  id: string;
+  path: string;
+  revision_number: number;
+  requested_by: string;
+  requester: string;
+  title: string;
+  description: string;
+  state: "open" | "approved" | "changes_requested" | "closed";
+  created_at: string;
+  updated_at: string;
+  closed_at: string | null;
+  reviewers: ReviewerDecision[];
+}
+
+export interface CreateReviewRequestInput {
+  workspaceId: string;
+  path: string;
+  revisionNumber: number;
+  title: string;
+  description?: string;
+  reviewers: string[];
+}
+
+export interface Collaborator {
+  user_id: string;
+  username: string;
+  display_name?: string | null;
+  role: string;
+  is_admin: boolean;
 }
 
 export interface AdapterValidationResponse {

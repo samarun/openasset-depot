@@ -1,0 +1,81 @@
+name: Host integrations
+
+# Runs each host integration's panel inside the real application.
+#
+# Split out from ci.yml because the licensed legs can only run on a studio's
+# self-hosted runners: Maya, Houdini, and Nuke all need a licence server, which
+# no GitHub-hosted runner has. Keeping them here means a fork with no runners
+# still gets a green CI run, and a studio that adds runners gets real coverage
+# without editing the main workflow.
+#
+# See docs/host-ci.md for how to attach a licensed runner.
+
+on:
+  push:
+    paths:
+      - "plugins/**"
+      - "scripts/host-smoke.py"
+      - "scripts/host-smoke/**"
+      - "scripts/test-blender-addon.py"
+      - ".github/workflows/host-matrix.yml"
+  pull_request:
+    paths:
+      - "plugins/**"
+      - "scripts/host-smoke.py"
+      - "scripts/host-smoke/**"
+      - "scripts/test-blender-addon.py"
+      - ".github/workflows/host-matrix.yml"
+  # Lets a studio verify a licence-server change without pushing a commit.
+  workflow_dispatch:
+
+jobs:
+  blender:
+    name: Blender ${{ matrix.blender }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest version bl_info claims to support and the current LTS. The
+        # add-on advertises 3.6, so 3.6 is the version that has to keep working.
+        blender: ["3.6.21", "4.2.9"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Blender ${{ matrix.blender }}
+        env:
+          VERSION: ${{ matrix.blender }}
+        run: |
+          set -euo pipefail
+          series="${VERSION%.*}"
+          archive="blender-${VERSION}-linux-x64.tar.xz"
+          curl -fsSL --retry 3 -o "/tmp/${archive}" \
+            "https://download.blender.org/release/Blender${series}/${archive}"
+          mkdir -p /opt/blender
+          tar -xJf "/tmp/${archive}" -C /opt/blender --strip-components=1
+          /opt/blender/blender --version
+      - name: Run the Blender smoke test
+        env:
+          OAD_BLENDER_EXECUTABLE: /opt/blender/blender
+        run: ./scripts/host-smoke.py --host blender --require-host
+
+  licensed:
+    name: ${{ matrix.host }}
+    # Studios label their runners `oad-host-<name>`. Without such a runner the
+    # job stays queued rather than failing, so it is only requested when the
+    # repository advertises the runners through a variable.
+    if: vars.OAD_LICENSED_HOST_RUNNERS == 'true'
+    runs-on: [self-hosted, "oad-host-${{ matrix.host }}"]
+    strategy:
+      fail-fast: false
+      matrix:
+        host: [maya, houdini, nuke]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Report which host was found
+        run: ./scripts/host-smoke.py --list
+      # --require-host so a runner whose licence server is unreachable fails
+      # loudly. A skip here would defeat the point of having the runner.
+      - name: Run the ${{ matrix.host }} smoke test
+        run: ./scripts/host-smoke.py --host ${{ matrix.host }} --require-host
+
+# The Adobe, Resolve, Unity, and Unreal panels have no batch mode worth driving,
+# so they stay covered by the syntax, vocabulary, and packaging checks in ci.yml.

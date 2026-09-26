@@ -163,6 +163,33 @@ rejects short/example JWT secrets. Configure:
 - `OAD_ALLOW_SIGNUPS`: permits public self-registration when `true`; new users
   still need an administrator-granted depot role. Disable it after onboarding.
 
+### Single sign-on (optional)
+
+Leave `OAD_OIDC_ISSUER` unset to stay on username/password auth. Setting it turns
+on the **Continue with** button in the desktop app and requires all of:
+
+- `OAD_OIDC_ISSUER`: provider URL; discovery appends
+  `/.well-known/openid-configuration`.
+- `OAD_OIDC_CLIENT_ID` and `OAD_OIDC_CLIENT_SECRET`: confidential client
+  credentials.
+- `OAD_OIDC_REDIRECT_URI`: use `http://127.0.0.1:18081/callback`, and register the
+  same value with the provider as an allowed redirect. The desktop app opens a
+  loopback listener on port 18081 for a single request, so the port must match
+  exactly; the path is not otherwise significant.
+
+Optional:
+
+- `OAD_OIDC_EXTRA_SCOPES`: space-separated scopes beyond `openid profile email`.
+- `OAD_OIDC_GROUPS_CLAIM`: ID-token claim listing directory groups. Each value is
+  matched against a depot group's `external_id`, so membership follows the
+  directory. Create the group and grant its depot permissions first: sign-on
+  syncs membership but never invents groups or roles.
+- `OAD_OIDC_ADMIN_GROUP`: group whose members receive system-admin rights. This
+  grants admin only, not depot permissions.
+
+The browser build cannot receive the loopback redirect and shows only the
+password form, even against an SSO-enabled server.
+
 Use HTTPS at a reverse proxy/load balancer outside localhost. Forward request IDs
 and retain structured JSON logs. Add external IP-aware authentication throttling;
 the application intentionally does not trust arbitrary forwarded client IPs.

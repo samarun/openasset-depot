@@ -8,12 +8,16 @@ import {
 import { ActionNotice } from "./components/ActionNotice";
 import { CommandPalette, type CommandAction } from "./components/CommandPalette";
 import { ConnectionStatusBar } from "./components/ConnectionStatusBar";
+import { completeFirstSyncGuide, isFirstSyncGuideComplete } from "./components/FirstSyncGuide";
 import { OperationProgressBar } from "./components/OperationProgressBar";
+import { ReviewRequestDialog } from "./components/ReviewRequestDialog";
 import { ReviewViewer, type ReviewCommentDraft } from "./components/ReviewViewer";
 import { Sidebar } from "./components/Sidebar";
 import { SubmitDialog } from "./components/SubmitDialog";
 import { TopBar } from "./components/TopBar";
 import { assetFromPendingPath, assetsFromSyncPlan } from "./data/assets";
+import { resolvePrimaryAction } from "./data/primaryAction";
+import { notifyOperationComplete } from "./native/notifications";
 import {
   type PendingIntegrationResult,
   type IntegrationProgress,
@@ -40,6 +44,8 @@ import { Changes } from "./pages/Changes";
 import { History } from "./pages/History";
 import { Home } from "./pages/Home";
 import { Locks } from "./pages/Locks";
+import { Reviews } from "./pages/Reviews";
+import { Shelves } from "./pages/Shelves";
 import { Login } from "./pages/Login";
 import { Settings } from "./pages/Settings";
 import { Workspace } from "./pages/Workspace";
@@ -47,6 +53,7 @@ import { WorkspaceSelector } from "./pages/WorkspaceSelector";
 import type {
   AssetFile,
   Changelist,
+  Collaborator,
   CreateWorkspaceInput,
   Depot,
   FileHistoryEntry,
@@ -54,6 +61,8 @@ import type {
   LockInfo,
   ReviewComment,
   ReviewMedia,
+  ReviewRequest,
+  ShelfSummary,
   Stream,
   SyncPlanEntry,
   UserSession,
@@ -86,6 +95,9 @@ export function App() {
   const [depots, setDepots] = useState<Depot[]>([]);
   const [streams, setStreams] = useState<Stream[]>([]);
   const [locks, setLocks] = useState<LockInfo[]>([]);
+  const [shelves, setShelves] = useState<ShelfSummary[]>([]);
+  const [reviewRequests, setReviewRequests] = useState<ReviewRequest[]>([]);
+  const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
   const [filetypes, setFiletypes] = useState<FileTypeRule[]>([]);
   const [syncPlan, setSyncPlan] = useState<SyncPlanEntry[]>([]);
   const [workspaceFiles, setWorkspaceFiles] = useState<SyncPlanEntry[]>([]);
@@ -104,12 +116,19 @@ export function App() {
   const [validating, setValidating] = useState(false);
   const [loadingWorkspaces, setLoadingWorkspaces] = useState(false);
   const [loadingLocks, setLoadingLocks] = useState(false);
+  const [loadingShelves, setLoadingShelves] = useState(false);
+  const [loadingReviews, setLoadingReviews] = useState(false);
+  const [loadingCollaborators, setLoadingCollaborators] = useState(false);
+  const [reviewRequestOpen, setReviewRequestOpen] = useState(false);
+  const [reviewRequestFile, setReviewRequestFile] = useState<AssetFile>();
   const [actionBusy, setActionBusy] = useState(false);
   const [workspaceError, setWorkspaceError] = useState<string>();
   const [notice, setNotice] = useState<Notice>();
   const [operationProgress, setOperationProgress] = useState<IntegrationProgress>();
   const [reviewFile, setReviewFile] = useState<AssetFile>();
   const [demoReviewComments, setDemoReviewComments] = useState<ReviewComment[]>([]);
+  // Bumped whenever onboarding completes so the guide re-evaluates its stored state.
+  const [onboardingRevision, setOnboardingRevision] = useState(0);
 
   const api = useMemo(
     () => (session ? new OpenAssetApiClient(session.serverUrl) : undefined),
@@ -173,6 +192,21 @@ export function App() {
   }, [pendingFiles]);
   const changelists = demoMode ? mockChangelists : liveChangelist ? [liveChangelist] : [];
   const selectedFile = files.find((file) => file.id === selectedFileId) ?? files[0];
+  // Demo sessions skip onboarding: there is no real folder to sync into.
+  const showFirstSyncGuide = useMemo(
+    () => Boolean(
+      !demoMode
+        && connectionMode === "connected"
+        && selectedWorkspace
+        && !isFirstSyncGuideComplete(selectedWorkspace.id),
+    ),
+    [connectionMode, demoMode, onboardingRevision, selectedWorkspace],
+  );
+  const dismissFirstSync = useCallback(() => {
+    if (!selectedWorkspace) return;
+    completeFirstSyncGuide(selectedWorkspace.id);
+    setOnboardingRevision((value) => value + 1);
+  }, [selectedWorkspace]);
   const loadAssetPreview = useCallback(async (file: AssetFile) => {
     if (!session || !api || !selectedWorkspace || demoMode || !file.previewAvailable) return undefined;
     const blob = await api.downloadPreview(
@@ -182,6 +216,11 @@ export function App() {
       file.revision,
     );
     return blob ? URL.createObjectURL(blob) : undefined;
+  }, [api, demoMode, selectedWorkspace, session]);
+
+  const loadDependencyImpact = useCallback(async (file: AssetFile) => {
+    if (!session || !api || !selectedWorkspace || demoMode) return undefined;
+    return await api.dependencyImpact(session.token, selectedWorkspace.id, file.path);
   }, [api, demoMode, selectedWorkspace, session]);
 
   const loadReviewMedia = useCallback(async (file: AssetFile): Promise<ReviewMedia | undefined> => {
@@ -413,6 +452,7 @@ export function App() {
     setPendingFiles([]);
     setBrowserUploads([]);
     setBrowserChangelistId(undefined);
+    setShelves([]);
   }, [selectedWorkspace?.id]);
 
   useEffect(() => {
@@ -442,6 +482,7 @@ export function App() {
       return;
     }
     setActionBusy(true);
+    const startedAt = Date.now();
     try {
       const result = await runWorkspaceIntegration<{ synced_count: number }>(
         session,
@@ -449,12 +490,14 @@ export function App() {
         "sync",
         { onProgress: setOperationProgress },
       );
-      setNotice({
-        message: result.synced_count > 0
-          ? `Synced ${result.synced_count} ${result.synced_count === 1 ? "file" : "files"}.`
-          : "Workspace is already up to date.",
-        tone: "success",
-      });
+      const message = result.synced_count > 0
+        ? `Synced ${result.synced_count} ${result.synced_count === 1 ? "file" : "files"}.`
+        : "Workspace is already up to date.";
+      setNotice({ message, tone: "success" });
+      void notifyOperationComplete("Sync complete", message, Date.now() - startedAt);
+      // A sync that completes at all retires onboarding, even on an empty depot.
+      completeFirstSyncGuide(selectedWorkspace.id);
+      setOnboardingRevision((value) => value + 1);
       await refreshSyncPlan(false);
       await refreshWorkspaceFiles();
     } catch (error) {
@@ -482,6 +525,250 @@ export function App() {
       setLoadingLocks(false);
     }
   }, [activateDemoMode, api, demoMode, session]);
+
+  const refreshShelves = useCallback(async () => {
+    if (!session || !api || !selectedWorkspace || demoMode) return;
+    setLoadingShelves(true);
+    try {
+      setShelves(await api.listShelves(session.token, selectedWorkspace.id));
+    } catch (error) {
+      if (isConnectionError(error)) activateDemoMode();
+      setNotice({ message: friendlyApiError(error), tone: "error" });
+    } finally {
+      setLoadingShelves(false);
+    }
+  }, [activateDemoMode, api, demoMode, selectedWorkspace, session]);
+
+  /**
+   * Restores a shelf into its changelist's pending operations.
+   *
+   * The desktop app has no local checkout of its own, so this recreates the
+   * pending change and leaves the bytes on the server; the next sync from the
+   * host or CLI brings them down.
+   */
+  const restoreShelf = useCallback(async (shelf: ShelfSummary) => {
+    if (!session || !api || demoMode) return;
+    setActionBusy(true);
+    try {
+      if (isNativeDesktop() && selectedWorkspace) {
+        await runWorkspaceIntegration(session, selectedWorkspace, "unshelve", {
+          onProgress: setOperationProgress,
+        });
+        setNotice({ message: "Shelf restored into this workspace.", tone: "success" });
+      } else {
+        const restored = await api.unshelveChangelist(session.token, shelf.changelist_id);
+        setNotice({
+          message: `Restored ${restored.files.length} file(s) to the changelist. Sync to bring the content down.`,
+          tone: "success",
+        });
+      }
+      await Promise.all([refreshShelves(), refreshPending()]);
+    } catch (error) {
+      setNotice({ message: friendlyApiError(error), tone: "error" });
+    } finally {
+      setActionBusy(false);
+      window.setTimeout(() => setOperationProgress(undefined), 900);
+    }
+  }, [api, demoMode, refreshPending, refreshShelves, selectedWorkspace, session]);
+
+  const discardShelf = useCallback(async (shelf: ShelfSummary) => {
+    if (!session || !api || demoMode) return;
+    setActionBusy(true);
+    try {
+      const result = await api.discardShelf(session.token, shelf.changelist_id);
+      setNotice({ message: `Discarded ${result.discarded} shelved file(s).`, tone: "success" });
+      await refreshShelves();
+    } catch (error) {
+      setNotice({ message: friendlyApiError(error), tone: "error" });
+    } finally {
+      setActionBusy(false);
+    }
+  }, [api, demoMode, refreshShelves, session]);
+
+  const shelveChanges = useCallback(async () => {
+    if (demoMode) {
+      setNotice({ message: "Shelving is not available in Demo Mode.", tone: "info" });
+      return;
+    }
+    if (!session || !selectedWorkspace || !api) {
+      setNotice({ message: "Connect to the server before shelving changes.", tone: "error" });
+      return;
+    }
+    setActionBusy(true);
+    try {
+      if (isNativeDesktop()) {
+        await runWorkspaceIntegration(session, selectedWorkspace, "shelve", {
+          onProgress: setOperationProgress,
+        });
+      } else {
+        if (browserUploads.length === 0) throw new Error("Choose one or more files to shelve first.");
+        let changelistId = browserChangelistId;
+        if (!changelistId) {
+          const changelist = await api.createChangelist(
+            session.token,
+            selectedWorkspace.id,
+            "Shelved from the browser",
+          );
+          changelistId = changelist.id;
+          setBrowserChangelistId(changelistId);
+        }
+        for (const upload of browserUploads) {
+          if (upload.action === "edit") {
+            await api.editFile(session.token, selectedWorkspace.id, upload.path, changelistId);
+          } else {
+            await api.addFile(session.token, selectedWorkspace.id, upload.path, changelistId);
+          }
+        }
+        await api.shelveChangelist(session.token, changelistId, browserUploads);
+        setBrowserUploads([]);
+        setBrowserChangelistId(undefined);
+        setPendingFiles([]);
+      }
+      await Promise.all([refreshPending(), refreshShelves()]);
+      setNotice({
+        message: "Changes shelved. They are on the server without becoming a revision.",
+        tone: "success",
+      });
+      setActiveView("shelves");
+    } catch (error) {
+      setNotice({ message: friendlyApiError(error), tone: "error" });
+    } finally {
+      setActionBusy(false);
+      window.setTimeout(() => setOperationProgress(undefined), 900);
+    }
+  }, [
+    api,
+    browserChangelistId,
+    browserUploads,
+    demoMode,
+    refreshPending,
+    refreshShelves,
+    selectedWorkspace,
+    session,
+  ]);
+
+  const refreshReviews = useCallback(async () => {
+    if (!session || !api || !selectedWorkspace || demoMode) {
+      setReviewRequests([]);
+      return;
+    }
+    setLoadingReviews(true);
+    try {
+      setReviewRequests(await api.listReviewRequests(session.token, selectedWorkspace.id));
+    } catch (error) {
+      if (isConnectionError(error)) activateDemoMode();
+      setNotice({ message: friendlyApiError(error), tone: "error" });
+    } finally {
+      setLoadingReviews(false);
+    }
+  }, [activateDemoMode, api, demoMode, selectedWorkspace, session]);
+
+  const refreshCollaborators = useCallback(async () => {
+    if (!session || !api || !selectedWorkspace || demoMode) {
+      setCollaborators([]);
+      return;
+    }
+    setLoadingCollaborators(true);
+    try {
+      setCollaborators(await api.listCollaborators(session.token, selectedWorkspace.id));
+    } catch (error) {
+      setNotice({ message: friendlyApiError(error), tone: "error" });
+    } finally {
+      setLoadingCollaborators(false);
+    }
+  }, [api, demoMode, selectedWorkspace, session]);
+
+  const openReviewRequest = useCallback(
+    (file?: AssetFile) => {
+      if (demoMode) {
+        setNotice({ message: "Reviews need a live server connection.", tone: "info" });
+        return;
+      }
+      setReviewRequestFile(file ?? selectedFile);
+      setReviewRequestOpen(true);
+      void refreshCollaborators();
+    },
+    [demoMode, refreshCollaborators, selectedFile],
+  );
+
+  const createReviewRequest = useCallback(
+    async (input: { title: string; description: string; reviewers: string[] }) => {
+      if (!session || !api || !selectedWorkspace || !reviewRequestFile) return;
+      if (reviewRequestFile.revision <= 0) {
+        setNotice({ message: "Submit the asset before requesting a review.", tone: "error" });
+        return;
+      }
+      setActionBusy(true);
+      try {
+        await api.createReviewRequest(session.token, {
+          workspaceId: selectedWorkspace.id,
+          path: reviewRequestFile.path,
+          revisionNumber: reviewRequestFile.revision,
+          title: input.title,
+          description: input.description,
+          reviewers: input.reviewers,
+        });
+        setReviewRequestOpen(false);
+        setActiveView("reviews");
+        await refreshReviews();
+        setNotice({ message: "Review requested.", tone: "success" });
+      } catch (error) {
+        setNotice({ message: friendlyApiError(error), tone: "error" });
+      } finally {
+        setActionBusy(false);
+      }
+    },
+    [api, refreshReviews, reviewRequestFile, selectedWorkspace, session],
+  );
+
+  const decideReviewRequest = useCallback(
+    async (request: ReviewRequest, decision: "approved" | "changes_requested") => {
+      if (!session || !api || !selectedWorkspace) return;
+      setActionBusy(true);
+      try {
+        await api.decideReviewRequest(session.token, selectedWorkspace.id, request.id, decision);
+        await refreshReviews();
+        setNotice({
+          message: decision === "approved" ? "Review approved." : "Changes requested.",
+          tone: "success",
+        });
+      } catch (error) {
+        setNotice({ message: friendlyApiError(error), tone: "error" });
+      } finally {
+        setActionBusy(false);
+      }
+    },
+    [api, refreshReviews, selectedWorkspace, session],
+  );
+
+  const closeReviewRequest = useCallback(
+    async (request: ReviewRequest) => {
+      if (!session || !api || !selectedWorkspace) return;
+      setActionBusy(true);
+      try {
+        await api.closeReviewRequest(session.token, selectedWorkspace.id, request.id);
+        await refreshReviews();
+        setNotice({ message: "Review closed.", tone: "success" });
+      } catch (error) {
+        setNotice({ message: friendlyApiError(error), tone: "error" });
+      } finally {
+        setActionBusy(false);
+      }
+    },
+    [api, refreshReviews, selectedWorkspace, session],
+  );
+
+  // Shelves are only fetched when the page is opened: most sessions never park
+  // anything, and the query spans the whole stream rather than one workspace.
+  useEffect(() => {
+    if (activeView !== "shelves") return;
+    void refreshShelves();
+  }, [activeView, refreshShelves]);
+
+  useEffect(() => {
+    if (activeView !== "reviews") return;
+    void refreshReviews();
+  }, [activeView, refreshReviews]);
 
   const retryConnection = useCallback(async () => {
     if (!session || !api) return;
@@ -797,6 +1084,7 @@ export function App() {
       return;
     }
     setActionBusy(true);
+    const startedAt = Date.now();
     try {
       if (isNativeDesktop()) {
         await runWorkspaceIntegration(session, selectedWorkspace, "submit", {
@@ -836,12 +1124,11 @@ export function App() {
         refreshSyncPlan(false),
         refreshWorkspaceFiles(),
       ]);
-      setNotice({
-        message: isNativeDesktop()
-          ? "Changes submitted successfully."
-          : "Browser upload submitted. Desktop and DCC workspaces can sync it now.",
-        tone: "success",
-      });
+      const message = isNativeDesktop()
+        ? "Changes submitted successfully."
+        : "Browser upload submitted. Desktop and DCC workspaces can sync it now.";
+      setNotice({ message, tone: "success" });
+      void notifyOperationComplete("Submit complete", message, Date.now() - startedAt);
     } catch (error) {
       setNotice({ message: friendlyApiError(error), tone: "error" });
     } finally {
@@ -882,6 +1169,8 @@ export function App() {
     () => [
       { id: "sync", label: "Sync Latest", group: "Workspace", run: () => void syncLatest() },
       { id: "submit", label: "Submit Changes", group: "Changes", run: () => openSubmit() },
+      { id: "shelve", label: "Shelve Changes", group: "Changes", run: () => void shelveChanges() },
+      { id: "reviews", label: "Show Reviews", group: "Changes", run: () => setActiveView("reviews") },
       {
         id: "lock",
         label: "Lock / Check Out Selected File",
@@ -895,6 +1184,7 @@ export function App() {
         run: () => selectedFile && void performFileAction("unlock", selectedFile),
       },
       { id: "my-locks", label: "Show Files Locked by Me", group: "Locks", run: () => setActiveView("locks") },
+      { id: "shelves", label: "Show Shelved Work", group: "Changes", run: () => setActiveView("shelves") },
       { id: "project", label: "Open Project", group: "Workspace", run: () => setActiveView("workspace") },
       { id: "switch", label: "Switch Workspace", group: "Workspace", run: () => setSelectedWorkspace(undefined) },
       { id: "history", label: "Search History", group: "History", run: () => setActiveView("history") },
@@ -913,7 +1203,7 @@ export function App() {
         },
       },
     ],
-    [demoMode, openSubmit, performFileAction, selectedFile, syncLatest, validateSubmit],
+    [demoMode, openSubmit, performFileAction, selectedFile, shelveChanges, syncLatest, validateSubmit],
   );
 
   if (!session) {
@@ -954,6 +1244,16 @@ export function App() {
           session={currentSession}
           workspace={selectedWorkspace!}
           theme={theme}
+          primaryAction={resolvePrimaryAction({
+            files,
+            locks,
+            workspace: selectedWorkspace,
+            currentUser: currentSession.username,
+            onSync: () => void syncLatest(),
+            onSubmit: () => openSubmit(),
+            onNavigate: setActiveView,
+          })}
+          primaryActionBusy={actionBusy}
           onOpenPalette={() => setPaletteOpen(true)}
           onToggleTheme={() => setTheme((value) => (value === "light" ? "dark" : "light"))}
           onSwitchWorkspace={() => setSelectedWorkspace(undefined)}
@@ -968,7 +1268,10 @@ export function App() {
             />
           )}
           {notice && <ActionNotice {...notice} onClose={() => setNotice(undefined)} />}
-          <OperationProgressBar progress={operationProgress} />
+          <OperationProgressBar
+            progress={operationProgress}
+            onDismiss={() => setOperationProgress(undefined)}
+          />
           {renderView(activeView)}
         </div>
       </div>
@@ -982,6 +1285,16 @@ export function App() {
         onValidate={validateSubmit}
         onSubmit={(description) => void submitChanges(description)}
         onClose={() => setSubmitOpen(false)}
+      />
+      <ReviewRequestDialog
+        open={reviewRequestOpen}
+        file={reviewRequestFile}
+        collaborators={collaborators}
+        currentUser={currentSession.username}
+        loadingCollaborators={loadingCollaborators}
+        busy={actionBusy}
+        onSubmit={(input) => void createReviewRequest(input)}
+        onClose={() => setReviewRequestOpen(false)}
       />
       <ReviewViewer
         file={reviewFile}
@@ -1011,11 +1324,13 @@ export function App() {
           onDelete={(file) => void performFileAction("delete", file)}
           onSubmit={() => openSubmit()}
           onReview={setReviewFile}
+          onRequestReview={openReviewRequest}
           onHistory={() => setActiveView("history")}
           hasMoreFiles={workspaceFilesHasMore}
           onLoadMore={() => void loadMoreWorkspaceFiles()}
           busy={actionBusy}
           loadPreview={loadAssetPreview}
+          loadImpact={loadDependencyImpact}
         />
       );
     }
@@ -1024,7 +1339,48 @@ export function App() {
         <Changes
           changelists={changelists}
           onSubmit={openSubmit}
+          onShelve={() => void shelveChanges()}
           onBrowseWorkspace={() => setActiveView("workspace")}
+          busy={actionBusy}
+        />
+      );
+    }
+    if (view === "shelves") {
+      return (
+        <Shelves
+          shelves={shelves}
+          currentUser={currentSession.username}
+          loading={loadingShelves}
+          busy={actionBusy}
+          onRefresh={() => void refreshShelves()}
+          onRestore={(shelf) => void restoreShelf(shelf)}
+          onDiscard={(shelf) => void discardShelf(shelf)}
+        />
+      );
+    }
+    if (view === "reviews") {
+      return (
+        <Reviews
+          requests={reviewRequests}
+          currentUser={currentSession.username}
+          loading={loadingReviews}
+          busy={actionBusy}
+          onRefresh={() => void refreshReviews()}
+          onCreate={() => openReviewRequest()}
+          onDecide={(request, decision) => void decideReviewRequest(request, decision)}
+          onClose={(request) => void closeReviewRequest(request)}
+          onOpenAsset={(request) => {
+            const file = files.find((candidate) => candidate.path === request.path);
+            if (file) {
+              setReviewFile(file);
+              setActiveView("workspace");
+            } else {
+              setNotice({
+                message: `${request.path} is not in this workspace view. Sync it, then open Review & Annotate from the inspector.`,
+                tone: "info",
+              });
+            }
+          }}
         />
       );
     }
@@ -1055,6 +1411,8 @@ export function App() {
             onSubmit={() => openSubmit()}
             busy={actionBusy}
             loadPreview={loadAssetPreview}
+            showFirstSyncGuide={showFirstSyncGuide}
+            onDismissFirstSyncGuide={dismissFirstSync}
           />
         );
       }
@@ -1116,6 +1474,8 @@ export function App() {
         onSubmit={() => openSubmit()}
         busy={actionBusy}
         loadPreview={loadAssetPreview}
+        showFirstSyncGuide={showFirstSyncGuide}
+        onDismissFirstSyncGuide={dismissFirstSync}
       />
     );
   }

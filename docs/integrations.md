@@ -25,6 +25,56 @@ and verify `dist/integrations/SHA256SUMS` before studio distribution.
 - Actions show human-readable progress such as **Checking out scene**,
   **Downloading files**, **Validating**, and **Submitting changes**.
 
+## Integration protocol
+
+`oad integration --protocol-version N <command>` writes line-delimited JSON to
+stdout. Version 1 emits a single result object. Version 2 is additive: it emits
+zero or more `progress` messages followed by exactly one `result` message, and
+tags every message with a `type` field so readers can dispatch on it.
+
+A version 2 progress message looks like this:
+
+```json
+{
+  "protocol_version": 2,
+  "type": "progress",
+  "operation": "sync",
+  "phase": "transferring",
+  "message": "Downloading Content/Maps/Main.umap",
+  "completed": 70,
+  "total": 100,
+  "path": "Content/Maps/Main.umap",
+  "files_completed": 12,
+  "bytes_completed": 5242880
+}
+```
+
+`operation`, `phase`, `message`, `completed`, and `total` are always present.
+The transfer detail fields — `path`, `files_completed`, `files_total`,
+`bytes_completed`, `bytes_total` — are **omitted whenever the CLI does not know
+the value**. In particular a paged sync omits `files_total` and `bytes_total`
+until it has finished discovering work, so consumers must render a running count
+rather than inventing a denominator. Readers should ignore unknown fields so
+that later additions stay backward compatible.
+
+### Cancel policy
+
+Sync and submit are safe to cancel only at defined boundaries:
+
+- **Safe:** between sync pages. Each page is applied to the workspace, persisted
+  to `.oad/state.json`, and acknowledged to the server before the next page is
+  requested, so an interrupted sync resumes cleanly from the last acknowledged
+  page.
+- **Unsafe:** during a multipart submit upload. The changelist submit is a
+  single atomic server transaction; killing the client mid-upload aborts the
+  request server-side and leaves the changelist open with pending files intact,
+  but no partial revision is ever created.
+- A workspace operation lock (`.oad/operation.lock`) prevents a second CLI or
+  desktop operation from racing an in-flight one.
+
+Dismissing the desktop progress panel only hides it; the underlying operation
+continues to run.
+
 ## Blender
 
 Install `openasset-depot-blender-0.1.2.zip` through **Edit > Preferences >

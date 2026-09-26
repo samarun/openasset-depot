@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: openasset_test
       POSTGRES_PASSWORD: isolated-test-password
     ports:
-      - "127.0.0.1:55433:5432"
+      - "127.0.0.1:${OAD_TEST_POSTGRES_PORT:-55433}:5432"
     tmpfs:
       - /var/lib/postgresql/data
     healthcheck:
@@ -34,7 +34,7 @@ services:
       postgres-test:
         condition: service_healthy
     ports:
-      - "127.0.0.1:18081:8080"
+      - "127.0.0.1:${OAD_TEST_API_PORT:-18081}:8080"
     volumes:
       - test_objects:/tmp/openasset-objects
     healthcheck:
