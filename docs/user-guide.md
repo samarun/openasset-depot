@@ -129,8 +129,9 @@ The review studio supports:
 - Native browser playback for PNG/JPEG/WebP/GIF images, MP4/WebM video, and
   MP3/WAV/OGG audio.
 - Interactive FBX, GLB, and glTF review with orbit controls, animation selection,
-  play/pause/loop, previous/next 24 fps frame stepping, elapsed time, wireframe,
-  and skeleton overlays.
+  play/pause/loop, source-rate frame stepping, elapsed time, wireframe, and
+  skeleton overlays. Legacy proxies without timebase metadata show time without
+  inventing a frame rate.
 - Comments captured at the current media time and frame, with one-click seeking
   back to that feedback point.
 - Pen, highlighter, rectangle, and arrow sketches with adjustable color and size.
@@ -143,11 +144,14 @@ attach a portable GLB, FBX, MP4, or WebM proxy to the same revision:
 
 ```sh
 oad --cwd /absolute/path/to/MyProject integration review-proxy \
-  Scenes/Shot.blend --media /tmp/Shot-review.glb
+  Scenes/Shot.blend --media /tmp/Shot-review.glb \
+  --frame-rate 24000/1001 --start-frame 1001
 ```
 
-The Blender integration creates an animated GLB proxy automatically after a
+The upload is streamed through a resumable session. The Blender integration
+creates an animated GLB proxy automatically after a
 successful submit when **Generate interactive 3D review proxy** is enabled.
+It also supplies the scene's effective frame rate and timeline start frame.
 Maya, Houdini, Unreal, and other studio integrations can use the command above
 with a host-generated playblast or model export. The proxy is immutable and
 stored in the same BLAKE3 chunk store as the source revision.

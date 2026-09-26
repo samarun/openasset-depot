@@ -38,6 +38,9 @@ const UPLOAD_OFFSET: &str = "x-upload-offset";
 pub struct BeginUploadRequest {
     pub workspace_id: Uuid,
     pub path: String,
+    /// Separates source-content staging from generated review media.
+    #[serde(default = "default_upload_purpose")]
+    pub purpose: String,
     /// Total size when the client knows it, so overruns are rejected early.
     pub size_bytes: Option<i64>,
 }
@@ -46,6 +49,7 @@ pub struct BeginUploadRequest {
 pub struct UploadSessionResponse {
     pub upload_id: Uuid,
     pub path: String,
+    pub purpose: String,
     pub received_bytes: i64,
     pub declared_size_bytes: Option<i64>,
     pub blob_hash: Option<String>,
@@ -74,6 +78,7 @@ pub async fn begin_upload(
     let user = state.require_user(&headers)?;
     let workspace = workspace_for_user(&state.db, req.workspace_id, &user).await?;
     let depot_path = normalize_depot_path(&req.path)?;
+    let purpose = validate_upload_purpose(&req.purpose)?;
     if let Some(size) = req.size_bytes {
         if size < 0 {
             return Err(AppError::bad_request("size_bytes cannot be negative"));
@@ -88,20 +93,28 @@ pub async fn begin_upload(
 
     let row = sqlx::query(
         r#"
-        INSERT INTO upload_sessions (user_id, workspace_id, depot_path, declared_size_bytes)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (workspace_id, depot_path) WHERE finalized_at IS NULL
+        INSERT INTO upload_sessions
+            (user_id, workspace_id, depot_path, purpose, declared_size_bytes)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (user_id, workspace_id, depot_path, purpose) WHERE finalized_at IS NULL
         DO UPDATE SET updated_at = now()
-        RETURNING id, depot_path, received_bytes, declared_size_bytes, blob_hash,
+        WHERE upload_sessions.declared_size_bytes IS NOT DISTINCT FROM EXCLUDED.declared_size_bytes
+        RETURNING id, depot_path, purpose, received_bytes, declared_size_bytes, blob_hash,
                   finalized_at, created_at
         "#,
     )
     .bind(user.user_id)
     .bind(workspace.id)
     .bind(&depot_path)
+    .bind(purpose)
     .bind(req.size_bytes)
-    .fetch_one(&state.db)
-    .await?;
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| {
+        AppError::conflict(
+            "an open upload for this target declares a different size; let it expire or finish it before starting another",
+        )
+    })?;
 
     Ok(Json(session_response(row)))
 }
@@ -195,7 +208,7 @@ pub async fn upload_chunk(
         UPDATE upload_sessions
         SET received_bytes = $2, updated_at = now()
         WHERE id = $1 AND finalized_at IS NULL
-        RETURNING id, depot_path, received_bytes, declared_size_bytes, blob_hash,
+        RETURNING id, depot_path, purpose, received_bytes, declared_size_bytes, blob_hash,
                   finalized_at, created_at
         "#,
     )
@@ -303,7 +316,7 @@ async fn load_session(
 ) -> AppResult<sqlx::postgres::PgRow> {
     sqlx::query(
         r#"
-        SELECT id, user_id, workspace_id, depot_path, received_bytes,
+        SELECT id, user_id, workspace_id, depot_path, purpose, received_bytes,
                declared_size_bytes, blob_hash, finalized_at, created_at
         FROM upload_sessions
         WHERE id = $1 AND user_id = $2
@@ -336,10 +349,64 @@ fn session_response(row: sqlx::postgres::PgRow) -> UploadSessionResponse {
     UploadSessionResponse {
         upload_id: row.get("id"),
         path: row.get("depot_path"),
+        purpose: row.get("purpose"),
         received_bytes: row.get("received_bytes"),
         declared_size_bytes: row.get("declared_size_bytes"),
         blob_hash: row.get("blob_hash"),
         finalized: finalized_at.is_some(),
         created_at: row.get("created_at"),
     }
+}
+
+/// A finalized staged object that another service may attach to durable state.
+pub(crate) struct FinalizedUpload {
+    pub blob_hash: String,
+    pub size_bytes: i64,
+}
+
+/// Resolves a finalized upload only when its full ownership and target tuple
+/// matches. This prevents a user from attaching an unrelated staged blob to an
+/// immutable review revision by guessing an upload id.
+pub(crate) async fn finalized_upload_for_target(
+    state: &AppState,
+    user: &AuthUser,
+    upload_id: Uuid,
+    workspace_id: Uuid,
+    path: &str,
+    purpose: &str,
+) -> AppResult<FinalizedUpload> {
+    let row = load_session(state, user, upload_id).await?;
+    if row.get::<Uuid, _>("workspace_id") != workspace_id
+        || row.get::<String, _>("depot_path") != path
+        || row.get::<String, _>("purpose") != purpose
+    {
+        return Err(AppError::bad_request(
+            "upload session does not match this workspace, path, and purpose",
+        ));
+    }
+    let blob_hash = row
+        .get::<Option<String>, _>("blob_hash")
+        .ok_or_else(|| AppError::conflict("upload must be finalized before it can be attached"))?;
+    let size_bytes = row.get::<i64, _>("received_bytes");
+    if size_bytes <= 0 {
+        return Err(AppError::bad_request("review proxy cannot be empty"));
+    }
+    Ok(FinalizedUpload {
+        blob_hash,
+        size_bytes,
+    })
+}
+
+fn validate_upload_purpose(value: &str) -> AppResult<&str> {
+    match value.trim() {
+        "content" => Ok("content"),
+        "review_proxy" => Ok("review_proxy"),
+        _ => Err(AppError::bad_request(
+            "upload purpose must be content or review_proxy",
+        )),
+    }
+}
+
+fn default_upload_purpose() -> String {
+    "content".to_string()
 }

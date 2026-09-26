@@ -1,15 +1,15 @@
-use std::io::Cursor;
-
 use axum::{
-    body::{Body, Bytes},
+    body::Body,
     extract::{Path as AxumPath, Query, State},
     http::{header, HeaderMap, HeaderValue, Response, StatusCode},
     Json,
 };
 use chrono::{DateTime, Utc};
+use futures_util::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{PgPool, Row};
+use tokio_util::io::StreamReader;
 use uuid::Uuid;
 
 use crate::{
@@ -19,19 +19,37 @@ use crate::{
     error::{AppError, AppResult},
     idempotency,
     paths::normalize_depot_path,
+    uploads::finalized_upload_for_target,
     workspaces::workspace_for_user,
 };
 
 pub mod requests;
 
 const MAX_ANNOTATION_BYTES: usize = 128 * 1024;
-const MAX_REVIEW_PROXY_BYTES: usize = 512 * 1024 * 1024;
+const REVIEW_PROXY_PURPOSE: &str = "review_proxy";
+const MAX_FRAME_RATE_NUMERATOR: i32 = 120_000;
+const MAX_FRAME_RATE_DENOMINATOR: i32 = 10_000;
 
 #[derive(Debug, Deserialize)]
 pub struct ReviewTargetQuery {
     pub workspace_id: Uuid,
     pub path: String,
     pub revision_number: i32,
+    pub frame_rate_numerator: Option<i32>,
+    pub frame_rate_denominator: Option<i32>,
+    pub start_frame: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AttachReviewProxyRequest {
+    pub workspace_id: Uuid,
+    pub path: String,
+    pub revision_number: i32,
+    pub upload_id: Uuid,
+    pub content_type: String,
+    pub frame_rate_numerator: Option<i32>,
+    pub frame_rate_denominator: Option<i32>,
+    pub start_frame: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,13 +88,16 @@ pub struct ReviewCommentResponse {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ReviewProxyResponse {
     pub path: String,
     pub revision_number: i32,
     pub blob_hash: String,
     pub size_bytes: i64,
     pub content_type: String,
+    pub frame_rate_numerator: Option<i32>,
+    pub frame_rate_denominator: Option<i32>,
+    pub start_frame: Option<i32>,
 }
 
 pub async fn list_comments(
@@ -326,49 +347,134 @@ pub async fn upload_review_proxy(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<ReviewTargetQuery>,
-    body: Bytes,
+    body: Body,
 ) -> AppResult<Json<ReviewProxyResponse>> {
     let user = state.require_user(&headers)?;
     let workspace = workspace_for_user(&state.db, query.workspace_id, &user).await?;
     let path = normalize_depot_path(&query.path)?;
-    if body.is_empty() || body.len() > MAX_REVIEW_PROXY_BYTES {
-        return Err(AppError::bad_request(
-            "review proxy must contain between 1 byte and 512 MiB",
-        ));
-    }
-    let content_type = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .split(';')
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    if !matches!(
-        content_type.as_str(),
-        "model/gltf-binary"
-            | "model/gltf+json"
-            | "application/vnd.autodesk.fbx"
-            | "video/mp4"
-            | "video/webm"
-    ) {
-        return Err(AppError::bad_request(
-            "review proxy must be GLB, glTF, FBX, MP4, or WebM",
-        ));
-    }
+    let content_type = normalize_review_proxy_content_type(
+        headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default(),
+    )?;
+    let timebase = validate_review_timebase(
+        query.frame_rate_numerator,
+        query.frame_rate_denominator,
+        query.start_frame,
+    )?;
     let revision_id =
         revision_for_target(&state.db, workspace.stream_id, &path, query.revision_number).await?;
 
+    // Retained for older integrations. The body is streamed through bounded
+    // object-store buffers; new clients should use upload sessions so a dropped
+    // connection can resume instead of restarting.
     let _storage_lease = state.storage_maintenance.read().await;
-    let manifest = state.storage.put_reader(Cursor::new(body.to_vec())).await?;
+    let reader = StreamReader::new(body.into_data_stream().map_err(std::io::Error::other));
+    let manifest = state.storage.put_reader(reader).await?;
+    if manifest.size_bytes == 0 {
+        return Err(AppError::bad_request("review proxy cannot be empty"));
+    }
+    let response = persist_review_proxy(
+        &state,
+        &user,
+        workspace.id,
+        workspace.stream_id,
+        &path,
+        query.revision_number,
+        revision_id,
+        manifest,
+        &content_type,
+        timebase,
+    )
+    .await?;
+    Ok(Json(response))
+}
+
+/// Attaches a finalized resumable upload to an immutable asset revision.
+pub async fn attach_review_proxy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<AttachReviewProxyRequest>,
+) -> AppResult<Json<ReviewProxyResponse>> {
+    let user = state.require_user(&headers)?;
+    let workspace = workspace_for_user(&state.db, request.workspace_id, &user).await?;
+    let path = normalize_depot_path(&request.path)?;
+    let content_type = normalize_review_proxy_content_type(&request.content_type)?;
+    let timebase = validate_review_timebase(
+        request.frame_rate_numerator,
+        request.frame_rate_denominator,
+        request.start_frame,
+    )?;
+    let revision_id = revision_for_target(
+        &state.db,
+        workspace.stream_id,
+        &path,
+        request.revision_number,
+    )
+    .await?;
+    let finalized = finalized_upload_for_target(
+        &state,
+        &user,
+        request.upload_id,
+        workspace.id,
+        &path,
+        REVIEW_PROXY_PURPOSE,
+    )
+    .await?;
+    // Keep local orphan cleanup from removing finalized-but-not-yet-referenced
+    // chunks while the proxy's blob records and immutable revision link commit.
+    let _storage_lease = state.storage_maintenance.read().await;
+    let manifest = state.storage.read_manifest(&finalized.blob_hash).await?;
+    if manifest.size_bytes as i64 != finalized.size_bytes {
+        return Err(AppError::conflict(
+            "finalized upload size does not match its stored manifest",
+        ));
+    }
+    let response = persist_review_proxy(
+        &state,
+        &user,
+        workspace.id,
+        workspace.stream_id,
+        &path,
+        request.revision_number,
+        revision_id,
+        manifest,
+        &content_type,
+        timebase,
+    )
+    .await?;
+    Ok(Json(response))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReviewTimebase {
+    frame_rate_numerator: i32,
+    frame_rate_denominator: i32,
+    start_frame: i32,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn persist_review_proxy(
+    state: &AppState,
+    user: &crate::auth::AuthUser,
+    workspace_id: Uuid,
+    stream_id: Uuid,
+    path: &str,
+    revision_number: i32,
+    revision_id: Uuid,
+    manifest: crate::storage::BlobManifest,
+    content_type: &str,
+    timebase: Option<ReviewTimebase>,
+) -> AppResult<ReviewProxyResponse> {
     let mut tx = state.db.begin().await?;
     insert_blob_records(&mut tx, &manifest).await?;
     let inserted: Option<Uuid> = sqlx::query_scalar(
         r#"
         INSERT INTO revision_review_proxies
-            (revision_id, blob_hash, size_bytes, content_type, created_by)
-        VALUES ($1, $2, $3, $4, $5)
+            (revision_id, blob_hash, size_bytes, content_type, created_by,
+             frame_rate_numerator, frame_rate_denominator, start_frame)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         ON CONFLICT (revision_id) DO NOTHING
         RETURNING id
         "#,
@@ -376,18 +482,41 @@ pub async fn upload_review_proxy(
     .bind(revision_id)
     .bind(&manifest.hash)
     .bind(manifest.size_bytes as i64)
-    .bind(&content_type)
+    .bind(content_type)
     .bind(user.user_id)
+    .bind(timebase.map(|value| value.frame_rate_numerator))
+    .bind(timebase.map(|value| value.frame_rate_denominator))
+    .bind(timebase.map(|value| value.start_frame))
     .fetch_optional(&mut *tx)
     .await?;
     if inserted.is_none() {
-        let existing_hash: String = sqlx::query_scalar(
-            "SELECT blob_hash FROM revision_review_proxies WHERE revision_id = $1",
+        let existing = sqlx::query(
+            r#"
+            SELECT blob_hash, content_type, frame_rate_numerator,
+                   frame_rate_denominator, start_frame
+            FROM revision_review_proxies
+            WHERE revision_id = $1
+            "#,
         )
         .bind(revision_id)
         .fetch_one(&mut *tx)
         .await?;
-        if existing_hash != manifest.hash {
+        let existing_timebase = match (
+            existing.get::<Option<i32>, _>("frame_rate_numerator"),
+            existing.get::<Option<i32>, _>("frame_rate_denominator"),
+            existing.get::<Option<i32>, _>("start_frame"),
+        ) {
+            (Some(numerator), Some(denominator), Some(start_frame)) => Some(ReviewTimebase {
+                frame_rate_numerator: numerator,
+                frame_rate_denominator: denominator,
+                start_frame,
+            }),
+            _ => None,
+        };
+        if existing.get::<String, _>("blob_hash") != manifest.hash
+            || existing.get::<String, _>("content_type") != content_type
+            || existing_timebase != timebase
+        {
             return Err(AppError::conflict(
                 "this immutable revision already has a different review proxy",
             ));
@@ -399,28 +528,34 @@ pub async fn upload_review_proxy(
         &state.db,
         audit::AuditEvent {
             actor_user_id: Some(user.user_id),
-            stream_id: Some(workspace.stream_id),
-            workspace_id: Some(workspace.id),
-            depot_path: Some(&path),
+            stream_id: Some(stream_id),
+            workspace_id: Some(workspace_id),
+            depot_path: Some(path),
             ..audit::AuditEvent::new(
                 "review_proxy_upload",
                 serde_json::json!({
-                    "revision_number": query.revision_number,
+                    "revision_number": revision_number,
                     "blob_hash": manifest.hash,
                     "content_type": content_type,
+                    "frame_rate_numerator": timebase.map(|value| value.frame_rate_numerator),
+                    "frame_rate_denominator": timebase.map(|value| value.frame_rate_denominator),
+                    "start_frame": timebase.map(|value| value.start_frame),
                 }),
             )
         },
     )
     .await?;
 
-    Ok(Json(ReviewProxyResponse {
-        path,
-        revision_number: query.revision_number,
+    Ok(ReviewProxyResponse {
+        path: path.to_string(),
+        revision_number,
         blob_hash: manifest.hash,
         size_bytes: manifest.size_bytes as i64,
-        content_type,
-    }))
+        content_type: content_type.to_string(),
+        frame_rate_numerator: timebase.map(|value| value.frame_rate_numerator),
+        frame_rate_denominator: timebase.map(|value| value.frame_rate_denominator),
+        start_frame: timebase.map(|value| value.start_frame),
+    })
 }
 
 pub async fn download_review_proxy(
@@ -433,7 +568,9 @@ pub async fn download_review_proxy(
     let path = normalize_depot_path(&query.path)?;
     let row = sqlx::query(
         r#"
-        SELECT rrp.blob_hash, rrp.size_bytes, rrp.content_type
+        SELECT rrp.blob_hash, rrp.size_bytes, rrp.content_type,
+               rrp.frame_rate_numerator, rrp.frame_rate_denominator,
+               rrp.start_frame
         FROM file_revisions fr
         JOIN revision_review_proxies rrp ON rrp.revision_id = fr.id
         WHERE fr.stream_id = $1 AND fr.depot_path = $2 AND fr.revision_number = $3
@@ -448,8 +585,37 @@ pub async fn download_review_proxy(
     let blob_hash: String = row.get("blob_hash");
     let size_bytes: i64 = row.get("size_bytes");
     let content_type: String = row.get("content_type");
+    let frame_rate_numerator: Option<i32> = row.get("frame_rate_numerator");
+    let frame_rate_denominator: Option<i32> = row.get("frame_rate_denominator");
+    let start_frame: Option<i32> = row.get("start_frame");
 
-    review_blob_response(&state, &headers, blob_hash, size_bytes, &content_type)
+    let mut response =
+        review_blob_response(&state, &headers, blob_hash, size_bytes, &content_type)?;
+    if let (Some(numerator), Some(denominator), Some(start_frame)) =
+        (frame_rate_numerator, frame_rate_denominator, start_frame)
+    {
+        insert_numeric_header(&mut response, "x-review-frame-rate-numerator", numerator)?;
+        insert_numeric_header(
+            &mut response,
+            "x-review-frame-rate-denominator",
+            denominator,
+        )?;
+        insert_numeric_header(&mut response, "x-review-start-frame", start_frame)?;
+    }
+    Ok(response)
+}
+
+fn insert_numeric_header(
+    response: &mut Response<Body>,
+    name: &'static str,
+    value: i32,
+) -> AppResult<()> {
+    response.headers_mut().insert(
+        name,
+        HeaderValue::from_str(&value.to_string())
+            .map_err(|_| AppError::internal("invalid review metadata header"))?,
+    );
+    Ok(())
 }
 
 fn review_blob_response(
@@ -633,6 +799,63 @@ fn validate_marker(timecode_ms: Option<i64>, frame_number: Option<i32>) -> AppRe
     Ok(())
 }
 
+fn normalize_review_proxy_content_type(value: &str) -> AppResult<String> {
+    let normalized = value
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if matches!(
+        normalized.as_str(),
+        "model/gltf-binary"
+            | "model/gltf+json"
+            | "application/vnd.autodesk.fbx"
+            | "video/mp4"
+            | "video/webm"
+    ) {
+        return Ok(normalized);
+    }
+    Err(AppError::bad_request(
+        "review proxy must be GLB, glTF, FBX, MP4, or WebM",
+    ))
+}
+
+fn validate_review_timebase(
+    numerator: Option<i32>,
+    denominator: Option<i32>,
+    start_frame: Option<i32>,
+) -> AppResult<Option<ReviewTimebase>> {
+    match (numerator, denominator, start_frame) {
+        (None, None, None) => Ok(None),
+        (Some(numerator), Some(denominator), start_frame) => {
+            let start_frame = start_frame.unwrap_or(0);
+            if !(1..=MAX_FRAME_RATE_NUMERATOR).contains(&numerator)
+                || !(1..=MAX_FRAME_RATE_DENOMINATOR).contains(&denominator)
+                || start_frame < 0
+            {
+                return Err(AppError::bad_request(
+                    "review timebase must use positive bounded frame-rate values and a non-negative start frame",
+                ));
+            }
+            let fps = f64::from(numerator) / f64::from(denominator);
+            if !(0.1..=1_000.0).contains(&fps) {
+                return Err(AppError::bad_request(
+                    "review frame rate must be between 0.1 and 1000 fps",
+                ));
+            }
+            Ok(Some(ReviewTimebase {
+                frame_rate_numerator: numerator,
+                frame_rate_denominator: denominator,
+                start_frame,
+            }))
+        }
+        _ => Err(AppError::bad_request(
+            "frame_rate_numerator and frame_rate_denominator must be provided together",
+        )),
+    }
+}
+
 fn validate_annotation(annotation: Option<&Value>) -> AppResult<()> {
     let Some(annotation) = annotation else {
         return Ok(());
@@ -677,7 +900,10 @@ mod tests {
     use axum::http::{header, HeaderMap, HeaderValue};
     use serde_json::json;
 
-    use super::{requested_byte_range, review_content_type, validate_annotation, validate_marker};
+    use super::{
+        normalize_review_proxy_content_type, requested_byte_range, review_content_type,
+        validate_annotation, validate_marker, validate_review_timebase, ReviewTimebase,
+    };
 
     #[test]
     fn maps_reviewable_media_types_without_exposing_active_content() {
@@ -695,6 +921,25 @@ mod tests {
         assert!(validate_marker(Some(-1), None).is_err());
         assert!(validate_annotation(Some(&json!({"tool": "pen", "points": []}))).is_ok());
         assert!(validate_annotation(Some(&json!([1, 2, 3]))).is_err());
+    }
+
+    #[test]
+    fn validates_exact_review_timebases_and_proxy_types() {
+        assert_eq!(
+            validate_review_timebase(Some(24_000), Some(1_001), Some(1_001)).unwrap(),
+            Some(ReviewTimebase {
+                frame_rate_numerator: 24_000,
+                frame_rate_denominator: 1_001,
+                start_frame: 1_001,
+            })
+        );
+        assert!(validate_review_timebase(Some(24), None, None).is_err());
+        assert!(validate_review_timebase(Some(0), Some(1), None).is_err());
+        assert_eq!(
+            normalize_review_proxy_content_type("model/gltf-binary; charset=binary").unwrap(),
+            "model/gltf-binary"
+        );
+        assert!(normalize_review_proxy_content_type("text/html").is_err());
     }
 
     #[test]

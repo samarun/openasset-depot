@@ -205,6 +205,33 @@ describe("OpenAssetApiClient", () => {
     );
   });
 
+  it("reads exact review-proxy timebase response headers", async () => {
+    const fetcher = vi.fn(async () => new Response("proxy", {
+      status: 200,
+      headers: {
+        "content-type": "model/gltf-binary",
+        "x-review-frame-rate-numerator": "24000",
+        "x-review-frame-rate-denominator": "1001",
+        "x-review-start-frame": "1001",
+      },
+    }));
+    const client = new OpenAssetApiClient("http://server", fetcher as unknown as typeof fetch);
+
+    const proxy = await client.downloadReviewProxy(
+      "token",
+      "workspace-1",
+      "Models/Hero.fbx",
+      4,
+    );
+
+    expect(proxy?.blob.type).toBe("model/gltf-binary");
+    expect(proxy).toMatchObject({
+      frameRateNumerator: 24_000,
+      frameRateDenominator: 1_001,
+      startFrame: 1_001,
+    });
+  });
+
   it("creates depots and streams with idempotency keys", async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       jsonResponse({ id: "created", name: "main", depot_id: "depot-1" }),

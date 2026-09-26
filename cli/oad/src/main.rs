@@ -195,6 +195,12 @@ enum IntegrationCommand {
         path: PathBuf,
         #[arg(long)]
         media: PathBuf,
+        /// Exact source frame rate, for example 24 or 24000/1001.
+        #[arg(long)]
+        frame_rate: Option<String>,
+        /// Source timeline frame represented by time zero.
+        #[arg(long, requires = "frame_rate")]
+        start_frame: Option<i32>,
     },
     History {
         path: PathBuf,
@@ -1120,15 +1126,21 @@ struct FinalizeUploadResponse {
     blob_hash: String,
 }
 
+struct StagedUpload {
+    upload_id: Uuid,
+    blob_hash: String,
+}
+
 /// Stages one large file and returns the blob hash submit should reference.
 async fn stage_upload(
     client: &reqwest::Client,
     config: &GlobalConfig,
     workspace_id: Uuid,
     depot_path: &str,
+    purpose: &str,
     local_path: &Path,
     size_bytes: u64,
-) -> Result<String> {
+) -> Result<StagedUpload> {
     let session: UploadSessionResponse = authed_post_json(
         client,
         config,
@@ -1136,6 +1148,7 @@ async fn stage_upload(
         &serde_json::json!({
             "workspace_id": workspace_id,
             "path": depot_path,
+            "purpose": purpose,
             "size_bytes": size_bytes,
         }),
     )
@@ -1184,7 +1197,10 @@ async fn stage_upload(
         &serde_json::json!({}),
     )
     .await?;
-    Ok(finalized.blob_hash)
+    Ok(StagedUpload {
+        upload_id,
+        blob_hash: finalized.blob_hash,
+    })
 }
 
 /// Sends the remainder of the file from `offset`, returning the new byte count.
@@ -1568,16 +1584,20 @@ async fn submit_workspace(
                     ProgressDetail::counted(path, upload_count - 1, upload_count, 0, size),
                 );
             }
-            let blob_hash = stage_upload(
+            let staged_upload = stage_upload(
                 client,
                 config,
                 workspace.workspace_id,
                 path,
+                "content",
                 &local_path,
                 size,
             )
             .await?;
-            staged.push(serde_json::json!({ "path": path, "blob_hash": blob_hash }));
+            staged.push(serde_json::json!({
+                "path": path,
+                "blob_hash": staged_upload.blob_hash,
+            }));
             continue;
         }
 
@@ -1703,16 +1723,20 @@ async fn shelve_workspace(
         if size_bytes.is_some_and(|size| size >= RESUMABLE_UPLOAD_THRESHOLD) {
             drop(file);
             let size = size_bytes.expect("size is present in this branch");
-            let blob_hash = stage_upload(
+            let staged_upload = stage_upload(
                 client,
                 config,
                 workspace.workspace_id,
                 path,
+                "content",
                 &local_path,
                 size,
             )
             .await?;
-            staged.push(serde_json::json!({ "path": path, "blob_hash": blob_hash }));
+            staged.push(serde_json::json!({
+                "path": path,
+                "blob_hash": staged_upload.blob_hash,
+            }));
             continue;
         }
         let stream = ReaderStream::new(file);
@@ -2392,9 +2416,12 @@ async fn integration(
         IntegrationCommand::Preview { path, image } => {
             integration_preview(client, config, path, image).await
         }
-        IntegrationCommand::ReviewProxy { path, media } => {
-            integration_review_proxy(client, config, path, media).await
-        }
+        IntegrationCommand::ReviewProxy {
+            path,
+            media,
+            frame_rate,
+            start_frame,
+        } => integration_review_proxy(client, config, path, media, frame_rate, start_frame).await,
         IntegrationCommand::History { path } => integration_history(client, config, path).await,
         IntegrationCommand::Validate { paths, adapter } => {
             integration_validate(client, config, paths, adapter).await
@@ -2986,6 +3013,8 @@ async fn integration_review_proxy(
     config: &GlobalConfig,
     path: PathBuf,
     media: PathBuf,
+    frame_rate: Option<String>,
+    start_frame: Option<i32>,
 ) -> Result<serde_json::Value> {
     let (workspace, workspace_dir) = load_workspace().await?;
     let _operation_lock = lock_workspace_operation(&workspace_dir)?;
@@ -3010,25 +3039,92 @@ async fn integration_review_proxy(
         "webm" => "video/webm",
         _ => bail!("review proxy must be GLB, glTF, FBX, MP4, or WebM"),
     };
-    let bytes = fs::read(&media)
+    let size_bytes = fs::metadata(&media)
         .await
-        .with_context(|| format!("failed to read review proxy {}", media.display()))?;
-    let url = format!(
-        "/api/reviews/proxy?workspace_id={}&path={}&revision_number={}",
-        workspace.workspace_id,
-        urlencoding::encode(&depot_path),
-        revision_number
-    );
-    let response = authed_request(
+        .with_context(|| format!("failed to inspect review proxy {}", media.display()))?
+        .len();
+    if size_bytes == 0 {
+        bail!("review proxy cannot be empty");
+    }
+    let timebase = frame_rate.as_deref().map(parse_frame_rate).transpose()?;
+    if start_frame.is_some_and(|value| value < 0) {
+        bail!("review proxy start frame cannot be negative");
+    }
+    let staged = stage_upload(
+        client,
         config,
-        client
-            .post(api_url(config, &url))
-            .header(reqwest::header::CONTENT_TYPE, content_type)
-            .body(bytes),
-    )?
-    .send()
+        workspace.workspace_id,
+        &depot_path,
+        "review_proxy",
+        &media,
+        size_bytes,
+    )
     .await?;
-    parse_response(response).await
+    authed_post_json(
+        client,
+        config,
+        "/api/reviews/proxy/attach",
+        &serde_json::json!({
+            "workspace_id": workspace.workspace_id,
+            "path": depot_path,
+            "revision_number": revision_number,
+            "upload_id": staged.upload_id,
+            "content_type": content_type,
+            "frame_rate_numerator": timebase.map(|value| value.0),
+            "frame_rate_denominator": timebase.map(|value| value.1),
+            "start_frame": timebase.map(|_| start_frame.unwrap_or(0)),
+        }),
+    )
+    .await
+}
+
+fn parse_frame_rate(value: &str) -> Result<(i32, i32)> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("frame rate cannot be empty");
+    }
+    let (numerator, denominator) = if let Some((numerator, denominator)) = value.split_once('/') {
+        (
+            numerator.trim().parse::<i64>()?,
+            denominator.trim().parse::<i64>()?,
+        )
+    } else if let Some((whole, fraction)) = value.split_once('.') {
+        if fraction.is_empty() || !fraction.chars().all(|character| character.is_ascii_digit()) {
+            bail!("frame rate must be a number or rational such as 24000/1001");
+        }
+        let scale = 10_i64
+            .checked_pow(fraction.len() as u32)
+            .ok_or_else(|| anyhow!("frame-rate precision is too large"))?;
+        let whole = whole.trim().parse::<i64>()?;
+        let fraction = fraction.parse::<i64>()?;
+        (
+            whole
+                .checked_mul(scale)
+                .and_then(|base| base.checked_add(fraction))
+                .ok_or_else(|| anyhow!("frame rate is too large"))?,
+            scale,
+        )
+    } else {
+        (value.parse::<i64>()?, 1)
+    };
+    if numerator <= 0 || denominator <= 0 {
+        bail!("frame rate must be positive");
+    }
+    let divisor = greatest_common_divisor(numerator, denominator);
+    let numerator =
+        i32::try_from(numerator / divisor).context("frame-rate numerator is too large")?;
+    let denominator =
+        i32::try_from(denominator / divisor).context("frame-rate denominator is too large")?;
+    Ok((numerator, denominator))
+}
+
+fn greatest_common_divisor(mut left: i64, mut right: i64) -> i64 {
+    while right != 0 {
+        let remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    left.abs().max(1)
 }
 
 async fn integration_validate(
@@ -3609,6 +3705,38 @@ mod tests {
             cli.command,
             Command::Integration {
                 command: IntegrationCommand::ReviewProxy { .. },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn review_proxy_timebase_accepts_fractional_studio_rates() {
+        assert_eq!(parse_frame_rate("24000/1001").unwrap(), (24_000, 1_001));
+        assert_eq!(parse_frame_rate("23.976").unwrap(), (2_997, 125));
+        assert_eq!(parse_frame_rate("24").unwrap(), (24, 1));
+        assert!(parse_frame_rate("0").is_err());
+
+        let cli = Cli::try_parse_from([
+            "oad",
+            "integration",
+            "review-proxy",
+            "Scenes/Shot.blend",
+            "--media",
+            "/tmp/Shot.glb",
+            "--frame-rate",
+            "24000/1001",
+            "--start-frame",
+            "1001",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Integration {
+                command: IntegrationCommand::ReviewProxy {
+                    start_frame: Some(1001),
+                    ..
+                },
                 ..
             }
         ));

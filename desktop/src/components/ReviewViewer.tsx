@@ -44,8 +44,6 @@ interface ReviewViewerProps {
   resolveComment: (comment: ReviewComment, resolved: boolean) => Promise<ReviewComment>;
 }
 
-const REVIEW_FPS = 24;
-
 export function ReviewViewer({
   file,
   open,
@@ -68,7 +66,7 @@ export function ReviewViewer({
   const [annotationWidth, setAnnotationWidth] = useState(4);
   const [annotationsVisible, setAnnotationsVisible] = useState(true);
   const [timecodeMs, setTimecodeMs] = useState(0);
-  const [frameNumber, setFrameNumber] = useState(0);
+  const [frameNumber, setFrameNumber] = useState<number>();
   const [seekRequest, setSeekRequest] = useState<{ id: number; timecodeMs: number }>();
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -86,6 +84,8 @@ export function ReviewViewer({
     setSelectedCommentId(undefined);
     setDraftMarks([]);
     setCommentBody("");
+    setTimecodeMs(0);
+    setFrameNumber(undefined);
     void Promise.all([loadMedia(file), loadComments(file)])
       .then(([nextMedia, nextComments]) => {
         if (!active) return;
@@ -126,6 +126,8 @@ export function ReviewViewer({
   if (!open || !file) return null;
   const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
   const timedMedia = isTimedMedia(extension) || isTimedContentType(media?.contentType);
+  const frameRate = reviewFrameRate(media);
+  const startFrame = media?.startFrame ?? 0;
 
   async function submitComment(event: FormEvent) {
     event.preventDefault();
@@ -165,7 +167,7 @@ export function ReviewViewer({
     setSelectedCommentId(comment.id);
     if (comment.timecode_ms == null) return;
     setTimecodeMs(comment.timecode_ms);
-    setFrameNumber(comment.frame_number ?? Math.round(comment.timecode_ms / 1000 * REVIEW_FPS));
+    setFrameNumber(comment.frame_number ?? frameAtTime(comment.timecode_ms, frameRate, startFrame));
     if (videoRef.current) videoRef.current.currentTime = comment.timecode_ms / 1000;
     if (audioRef.current) audioRef.current.currentTime = comment.timecode_ms / 1000;
     setSeekRequest({ id: Date.now(), timecodeMs: comment.timecode_ms });
@@ -174,7 +176,7 @@ export function ReviewViewer({
   function updateMediaTime(seconds: number) {
     const milliseconds = Math.round(seconds * 1000);
     setTimecodeMs(milliseconds);
-    setFrameNumber(Math.round(seconds * REVIEW_FPS));
+    setFrameNumber(frameAtTime(milliseconds, frameRate, startFrame));
   }
 
   return (
@@ -204,6 +206,8 @@ export function ReviewViewer({
                 videoRef,
                 audioRef,
                 seekRequest,
+                frameRate,
+                startFrame,
                 onTimeChange: updateMediaTime,
               })}
               {!loading && !mediaUrl && (
@@ -276,7 +280,8 @@ export function ReviewViewer({
                   <footer>
                     {comment.timecode_ms != null && (
                       <button type="button" onClick={() => selectComment(comment)}>
-                        <Clock3 size={13} /> {formatTimecode(comment.timecode_ms)} · F{comment.frame_number ?? 0}
+                        <Clock3 size={13} /> {formatTimecode(comment.timecode_ms)}
+                        {comment.frame_number != null ? ` · F${comment.frame_number}` : ""}
                       </button>
                     )}
                     {comment.annotation?.marks?.length ? (
@@ -292,7 +297,10 @@ export function ReviewViewer({
 
             <form className="review-comment-form" onSubmit={(event) => void submitComment(event)}>
               {timedMedia && (
-                <span className="review-current-time"><Clock3 size={14} /> {formatTimecode(timecodeMs)} · Frame {frameNumber}</span>
+                <span className="review-current-time">
+                  <Clock3 size={14} /> {formatTimecode(timecodeMs)}
+                  {frameNumber != null ? ` · Frame ${frameNumber}` : ""}
+                </span>
               )}
               {draftMarks.length > 0 && <span className="review-sketch-count"><PenLine size={14} /> {draftMarks.length} sketch mark{draftMarks.length === 1 ? "" : "s"}</span>}
               <textarea
@@ -322,10 +330,23 @@ interface RenderMediaArgs {
   videoRef: React.RefObject<HTMLVideoElement>;
   audioRef: React.RefObject<HTMLAudioElement>;
   seekRequest?: { id: number; timecodeMs: number };
+  frameRate?: number;
+  startFrame: number;
   onTimeChange: (seconds: number) => void;
 }
 
-function renderMedia({ extension, file, media, mediaUrl, videoRef, audioRef, seekRequest, onTimeChange }: RenderMediaArgs) {
+function renderMedia({
+  extension,
+  file,
+  media,
+  mediaUrl,
+  videoRef,
+  audioRef,
+  seekRequest,
+  frameRate,
+  startFrame,
+  onTimeChange,
+}: RenderMediaArgs) {
   const contentType = media?.contentType ?? "";
   if ((isModel(extension) || isModelContentType(contentType)) && media?.source === "asset") {
     const playerName = reviewPlayerFileName(file.name, contentType);
@@ -335,6 +356,8 @@ function renderMedia({ extension, file, media, mediaUrl, videoRef, audioRef, see
           fileName={playerName}
           source={mediaUrl}
           seekRequest={seekRequest}
+          frameRate={frameRate}
+          startFrame={startFrame}
           onTimeChange={(milliseconds) => onTimeChange(milliseconds / 1000)}
         />
       </Suspense>
@@ -389,6 +412,18 @@ function isModelContentType(contentType: string): boolean {
 function isTimedContentType(contentType?: string): boolean {
   if (!contentType) return false;
   return isModelContentType(contentType) || contentType.startsWith("video/") || contentType.startsWith("audio/");
+}
+
+export function reviewFrameRate(media?: ReviewMedia): number | undefined {
+  const numerator = media?.frameRateNumerator;
+  const denominator = media?.frameRateDenominator;
+  if (numerator == null || denominator == null || numerator <= 0 || denominator <= 0) return undefined;
+  return numerator / denominator;
+}
+
+export function frameAtTime(milliseconds: number, frameRate?: number, startFrame = 0): number | undefined {
+  if (frameRate == null) return undefined;
+  return startFrame + Math.round(Math.max(0, milliseconds) / 1000 * frameRate);
 }
 
 function formatTimecode(milliseconds: number): string {

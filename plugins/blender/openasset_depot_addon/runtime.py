@@ -213,6 +213,15 @@ def generate_scene_review_proxy() -> tuple[Path | None, str | None]:
         return None, f"Interactive review unavailable: {error}"
 
 
+def scene_review_timebase() -> tuple[str, int]:
+    """Returns the effective Blender timeline rate without assuming 24 fps."""
+    render = bpy.context.scene.render
+    fps_base = float(render.fps_base or 1.0)
+    effective_fps = float(render.fps) / fps_base
+    frame_rate = f"{effective_fps:.6f}".rstrip("0").rstrip(".")
+    return frame_rate, max(0, int(bpy.context.scene.frame_start))
+
+
 def run_operation(
     operation: Callable[[], Any],
     *,

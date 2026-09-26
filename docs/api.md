@@ -145,10 +145,12 @@ Submit is atomic and multipart, so an interrupted upload of a large plate or
 level file previously meant re-sending every byte. An upload session stages one
 file across as many requests as it takes:
 
-- `POST /api/uploads` — body `{ workspace_id, path, size_bytes? }`. Returns the
-  session, including `received_bytes`. Re-requesting the same workspace and path
-  returns the existing open session rather than creating a second one, so a
-  client that lost its upload id can still resume.
+- `POST /api/uploads` — body
+  `{ workspace_id, path, purpose?, size_bytes? }`. `purpose` is `content` by
+  default or `review_proxy` for generated review media. Returns the session,
+  including `received_bytes`. Re-requesting the same user, workspace, path, and
+  purpose returns the existing open session rather than creating a second one,
+  so a client that lost its upload id can still resume.
 - `POST /api/uploads/{id}` — raw body, with `X-Upload-Offset: <byte count>`.
   Appends at that offset and returns the new `received_bytes`. The offset is
   verified against the staged length; a mismatch returns `409` naming the offset
@@ -183,6 +185,7 @@ revision, and streamed only to users with access through the supplied workspace.
 - `GET /api/reviews/media?workspace_id=<uuid>&path=<depot-path>&revision_number=<n>`
 - `GET /api/reviews/proxy?workspace_id=<uuid>&path=<depot-path>&revision_number=<n>`
 - `POST /api/reviews/proxy?workspace_id=<uuid>&path=<depot-path>&revision_number=<n>`
+- `POST /api/reviews/proxy/attach`
 - `GET /api/reviews/comments?workspace_id=<uuid>&path=<depot-path>&revision_number=<n>`
 - `POST /api/reviews/comments`
 - `POST /api/reviews/comments/{id}/resolve`
@@ -200,9 +203,15 @@ without a verdict. A later submit of the same path is a new revision and needs
 a new review.
 
 Review media and proxy downloads are workspace-authorized, immutable, cacheable,
-and support single HTTP byte ranges. Portable proxy uploads accept GLB, glTF,
-FBX, MP4, or WebM bodies up to 512 MiB. One immutable proxy can be attached to
-each asset revision.
+and support single HTTP byte ranges. Portable proxies accept GLB, glTF, FBX,
+MP4, or WebM. New clients open a `review_proxy` upload session, stream and
+finalize it, then call `/api/reviews/proxy/attach` with the upload id, immutable
+revision target, MIME type, and optional exact `frame_rate_numerator`,
+`frame_rate_denominator`, and `start_frame`. The legacy raw-body endpoint remains
+compatible and now streams through bounded storage buffers. One immutable proxy
+can be attached to each asset revision. Downloads expose stored timebase fields
+through `X-Review-Frame-Rate-Numerator`, `X-Review-Frame-Rate-Denominator`, and
+`X-Review-Start-Frame`.
 
 Comments are revision-bound and accept optional `timecode_ms`, `frame_number`,
 `parent_comment_id`, and a structured JSON `annotation`. Annotation payloads are

@@ -197,6 +197,9 @@ export interface ReviewMedia {
   blob: Blob;
   contentType: string;
   source: "asset" | "preview";
+  frameRateNumerator?: number;
+  frameRateDenominator?: number;
+  startFrame?: number;
 }
 
 export interface FileOperationResponse {

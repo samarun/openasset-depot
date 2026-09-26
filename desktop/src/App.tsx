@@ -236,7 +236,14 @@ export function App() {
     const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
     if (file.reviewProxyAvailable) {
       const proxy = await api.downloadReviewProxy(session.token, selectedWorkspace.id, file.path, file.revision);
-      if (proxy) return { blob: proxy, contentType: proxy.type || "application/octet-stream", source: "asset" };
+      if (proxy) return {
+        blob: proxy.blob,
+        contentType: proxy.blob.type || "application/octet-stream",
+        source: "asset",
+        frameRateNumerator: proxy.frameRateNumerator,
+        frameRateDenominator: proxy.frameRateDenominator,
+        startFrame: proxy.startFrame,
+      };
     }
     if (DIRECT_REVIEW_EXTENSIONS.has(extension)) {
       const blob = await api.downloadReviewMedia(session.token, selectedWorkspace.id, file.path, file.revision);

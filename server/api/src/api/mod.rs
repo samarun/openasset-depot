@@ -104,6 +104,9 @@ pub fn build_router(state: AppState) -> Router {
         ])
         .expose_headers([
             HeaderName::from_static("x-request-id"),
+            HeaderName::from_static("x-review-frame-rate-numerator"),
+            HeaderName::from_static("x-review-frame-rate-denominator"),
+            HeaderName::from_static("x-review-start-frame"),
             header::ACCEPT_RANGES,
             header::CONTENT_RANGE,
             header::CONTENT_LENGTH,
@@ -241,6 +244,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/reviews/proxy",
             get(crate::reviews::download_review_proxy).post(crate::reviews::upload_review_proxy),
+        )
+        .route(
+            "/api/reviews/proxy/attach",
+            post(crate::reviews::attach_review_proxy),
         )
         .route(
             "/api/reviews/requests",

@@ -222,12 +222,21 @@ class BridgeClient:
         self,
         path: os.PathLike[str] | str,
         media: os.PathLike[str] | str,
+        frame_rate: Optional[str] = None,
+        start_frame: Optional[int] = None,
     ) -> Dict[str, Any]:
-        return self._invoke(
+        args = [
             "review-proxy",
             str(Path(path)),
             "--media",
             str(Path(media)),
+        ]
+        if frame_rate:
+            args.extend(["--frame-rate", frame_rate])
+            if start_frame is not None:
+                args.extend(["--start-frame", str(start_frame)])
+        return self._invoke(
+            *args,
             timeout_seconds=LONG_OPERATION_TIMEOUT_SECONDS,
         )
 

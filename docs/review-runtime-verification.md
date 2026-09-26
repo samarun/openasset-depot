@@ -22,19 +22,23 @@ browser workflow as immutable version 1 revisions.
   comment time beyond the clip duration.
 - Review media and proxy downloads support HTTP byte ranges.
 - The completed flow produces no browser page errors or console errors.
+- Committed Apache-2.0 project fixtures exercise GLB, embedded glTF, and FBX in
+  headless Chromium. CI requires successful decoding and a non-background
+  WebGL canvas; animated GLB/FBX fixtures must also advance their clip time.
+- Malformed exporter tracks are isolated and discarded without collapsing an
+  otherwise playable FBX scene.
+- Review proxies use resumable upload sessions and preserve rational source
+  rates such as `24000/1001` plus the source timeline start frame.
 
 The API integration suite separately verifies immutable proxy conflicts,
 annotation JSON, comment resolution, range responses, and authorization.
 
 ## Current Boundaries
 
-- Frame labels currently assume 24 fps. Source frame-rate/timebase metadata is
-  not yet stored with a revision or proxy.
-- Review-proxy uploads are capped at 512 MiB and currently buffer the request in
-  memory. They should move to the resumable streaming upload service before
-  accepting feature-length media or dense production geometry.
+- Legacy review proxies without source timebase metadata show elapsed time but
+  intentionally omit frame labels.
 - Browser-native review supports GLB, glTF, FBX, MP4, WebM, common images, and
   common audio. USD, Alembic, EXR sequences, and native DCC scenes need generated
   review proxies.
-- GPU/browser behavior is verified manually with the repeatable flow above; the
-  repository still needs a licensed, committed fixture set and canvas-pixel CI.
+- Browser CI uses Chromium software WebGL; periodic validation on representative
+  studio GPUs remains valuable for vendor-specific driver behavior.

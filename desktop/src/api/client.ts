@@ -67,6 +67,13 @@ export interface BrowserUpload {
   action: "add" | "edit";
 }
 
+export interface ReviewProxyDownload {
+  blob: Blob;
+  frameRateNumerator?: number;
+  frameRateDenominator?: number;
+  startFrame?: number;
+}
+
 export class OpenAssetApiClient {
   private readonly baseUrl: string;
   private readonly fetcher: typeof fetch;
@@ -446,7 +453,7 @@ export class OpenAssetApiClient {
     workspaceId: string,
     path: string,
     revisionNumber: number,
-  ): Promise<Blob | undefined> {
+  ): Promise<ReviewProxyDownload | undefined> {
     const query = new URLSearchParams({
       workspace_id: workspaceId,
       path,
@@ -459,7 +466,17 @@ export class OpenAssetApiClient {
     if (!response.ok) {
       throw new ApiError(`Review proxy request failed with ${response.status}`, response.status);
     }
-    return response.blob();
+    const blob = await response.blob();
+    const frameRateNumerator = optionalIntegerHeader(response, "x-review-frame-rate-numerator");
+    const frameRateDenominator = optionalIntegerHeader(response, "x-review-frame-rate-denominator");
+    const startFrame = optionalIntegerHeader(response, "x-review-start-frame");
+    if (
+      [frameRateNumerator, frameRateDenominator, startFrame].some((value) => value !== undefined)
+      && [frameRateNumerator, frameRateDenominator, startFrame].some((value) => value === undefined)
+    ) {
+      throw new ApiError("Review proxy returned an incomplete timebase", 502);
+    }
+    return { blob, frameRateNumerator, frameRateDenominator, startFrame };
   }
 
   listReviewComments(
@@ -691,6 +708,16 @@ export class OpenAssetApiClient {
 
     return (await response.json()) as T;
   }
+}
+
+function optionalIntegerHeader(response: Response, name: string): number | undefined {
+  const raw = response.headers.get(name);
+  if (raw == null) return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value)) {
+    throw new ApiError(`Review proxy returned an invalid ${name} header`, 502);
+  }
+  return value;
 }
 
 export function friendlyApiError(error: unknown): string {

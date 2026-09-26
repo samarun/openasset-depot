@@ -32,6 +32,12 @@
   FBX assets: direct playback, a GLB proxy attached to an FBX revision,
   timecoded comments, annotation persistence, and comment-to-frame seeking all
   pass against the real API. See [review runtime verification](review-runtime-verification.md).
+- Review-proxy uploads use purpose-isolated resumable sessions, and the retained
+  raw-body endpoint streams through bounded buffers for older integrations.
+- Review proxies preserve exact rational source frame rate and timeline start;
+  legacy media no longer receives an invented 24 fps label.
+- Project-owned GLB, embedded glTF, and FBX fixtures run in Chromium WebGL CI
+  with decoder, animation, console-error, and canvas-pixel assertions.
 
 ## Next Production Hardening
 
@@ -47,13 +53,6 @@
   today, but an admin must still create the group and grant its permissions.
 - Route browser uploads through the resumable upload session API; only the CLI
   and native desktop paths use it today.
-- Route review-proxy uploads through the same streamed, resumable path. The
-  current endpoint accepts at most 512 MiB but buffers that request in memory.
-- Store source frame-rate and timebase metadata with each review proxy. The
-  current 3D review UI labels frames at 24 fps even when the source was authored
-  at a different rate.
-- Add committed browser GPU tests with small licensed fixtures for GLB, glTF,
-  and FBX, including a canvas-pixel assertion and proxy-decoder regression.
 
 ## Scale And Workflow
 

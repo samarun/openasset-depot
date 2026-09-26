@@ -17,7 +17,10 @@ interface ThreeReviewPlayerProps {
   fileName: string;
   source: string;
   seekRequest?: { id: number; timecodeMs: number };
-  onTimeChange: (timecodeMs: number, frame: number) => void;
+  frameRate?: number;
+  startFrame?: number;
+  preserveDrawingBuffer?: boolean;
+  onTimeChange: (timecodeMs: number, frame?: number) => void;
 }
 
 interface Runtime {
@@ -29,7 +32,15 @@ interface Runtime {
   skeleton?: THREE.SkeletonHelper;
 }
 
-export function ThreeReviewPlayer({ fileName, source, seekRequest, onTimeChange }: ThreeReviewPlayerProps) {
+export function ThreeReviewPlayer({
+  fileName,
+  source,
+  seekRequest,
+  frameRate,
+  startFrame = 0,
+  preserveDrawingBuffer = false,
+  onTimeChange,
+}: ThreeReviewPlayerProps) {
   const mountRef = useRef<HTMLDivElement>(null);
   const runtimeRef = useRef<Runtime>();
   const playingRef = useRef(true);
@@ -62,7 +73,7 @@ export function ThreeReviewPlayer({ fileName, source, seekRequest, onTimeChange 
     scene.background = new THREE.Color(0x15191c);
     const camera = new THREE.PerspectiveCamera(42, 1, 0.01, 10_000);
     camera.position.set(3, 2, 5);
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     mount.appendChild(renderer.domElement);
@@ -90,16 +101,20 @@ export function ThreeReviewPlayer({ fileName, source, seekRequest, onTimeChange 
     const loaded = (model: THREE.Object3D, clips: THREE.AnimationClip[]) => {
       if (disposed) return;
       scene.add(model);
-      frameModel(model, camera, controls);
-      const runtime: Runtime = { clips, scene, model };
-      if (clips.length > 0) {
+      const playableClips = sanitizeAnimationClips(clips);
+      const runtime: Runtime = { clips: playableClips, scene, model };
+      if (playableClips.length > 0) {
         runtime.mixer = new THREE.AnimationMixer(model);
-        runtime.action = runtime.mixer.clipAction(clips[0]);
+        runtime.action = runtime.mixer.clipAction(playableClips[0]);
         runtime.action.setLoop(THREE.LoopRepeat, Infinity).play();
-        setDuration(clips[0].duration);
+        // FBX animation tracks can establish the model's initial transform.
+        // Apply time zero before framing or the camera may target a stale pose.
+        runtime.mixer.update(0);
+        setDuration(playableClips[0].duration);
       }
+      frameModel(model, camera, controls);
       runtimeRef.current = runtime;
-      setAnimations(clips.map((clip, index) => clip.name || `Animation ${index + 1}`));
+      setAnimations(playableClips.map((clip, index) => clip.name || `Animation ${index + 1}`));
       setError(undefined);
     };
 
@@ -122,9 +137,10 @@ export function ThreeReviewPlayer({ fileName, source, seekRequest, onTimeChange 
       if (runtime?.mixer && playingRef.current) runtime.mixer.update(delta);
       const current = runtime?.action?.time ?? runtime?.mixer?.time ?? 0;
       setElapsed(current);
-      const currentFrame = Math.round(current * 24);
-      if (currentFrame !== lastReportedFrameRef.current) {
-        lastReportedFrameRef.current = currentFrame;
+      const currentFrame = frameRate == null ? undefined : startFrame + Math.round(current * frameRate);
+      const reportTick = currentFrame ?? Math.round(current * 20);
+      if (reportTick !== lastReportedFrameRef.current) {
+        lastReportedFrameRef.current = reportTick;
         onTimeChangeRef.current(Math.round(current * 1000), currentFrame);
       }
       controls.update();
@@ -142,7 +158,7 @@ export function ThreeReviewPlayer({ fileName, source, seekRequest, onTimeChange 
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [fileName, source]);
+  }, [fileName, frameRate, preserveDrawingBuffer, source, startFrame]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -176,7 +192,10 @@ export function ThreeReviewPlayer({ fileName, source, seekRequest, onTimeChange 
   function step(direction: -1 | 1) {
     const runtime = runtimeRef.current;
     if (!runtime?.mixer) return;
-    const next = Math.max(0, Math.min((duration || Number.MAX_SAFE_INTEGER), elapsed + direction / 24));
+    const next = Math.max(
+      0,
+      Math.min((duration || Number.MAX_SAFE_INTEGER), elapsed + direction / (frameRate ?? 10)),
+    );
     if (runtime.action) {
       runtime.action.time = next;
       runtime.mixer.update(0);
@@ -234,7 +253,10 @@ export function ThreeReviewPlayer({ fileName, source, seekRequest, onTimeChange 
           {playing ? <Pause size={17} /> : <Play size={17} />}
         </button>
         <button type="button" onClick={() => step(1)} aria-label="Next keyframe"><ChevronRight size={17} /></button>
-        <span className="animation-time">{formatTime(elapsed)} / {formatTime(duration)} · F{Math.round(elapsed * 24)}</span>
+        <span className="animation-time">
+          {formatTime(elapsed)} / {formatTime(duration)}
+          {frameRate != null ? ` · F${startFrame + Math.round(elapsed * frameRate)}` : ""}
+        </span>
         {animations.length > 0 && (
           <select value={activeAnimation} onChange={(event) => selectAnimation(Number(event.target.value))} aria-label="Animation clip">
             {animations.map((animation, index) => <option key={`${animation}-${index}`} value={index}>{animation}</option>)}
@@ -246,6 +268,21 @@ export function ThreeReviewPlayer({ fileName, source, seekRequest, onTimeChange 
       </div>
     </div>
   );
+}
+
+export function sanitizeAnimationClips(clips: THREE.AnimationClip[]): THREE.AnimationClip[] {
+  return clips.flatMap((clip) => {
+    const tracks = clip.tracks.filter((track) => {
+      const valueSize = track.ValueTypeName === "quaternion"
+        ? 4
+        : track.ValueTypeName === "vector" || track.ValueTypeName === "color"
+          ? 3
+          : track.getValueSize();
+      return valueSize > 0 && track.times.length * valueSize === track.values.length;
+    });
+    if (tracks.length === 0) return [];
+    return [new THREE.AnimationClip(clip.name, clip.duration, tracks)];
+  });
 }
 
 function frameModel(model: THREE.Object3D, camera: THREE.PerspectiveCamera, controls: OrbitControls) {

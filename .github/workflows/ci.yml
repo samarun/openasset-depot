@@ -78,6 +78,12 @@ jobs:
         working-directory: desktop
       - run: npm test -- --run
         working-directory: desktop
+      - name: Install Chromium for WebGL review tests
+        run: npx playwright install --with-deps chromium
+        working-directory: desktop
+      - name: Run GLB and FBX canvas regression tests
+        run: npm run test:e2e
+        working-directory: desktop
       - run: npm run build
         working-directory: desktop
       - run: ../../desktop/node_modules/.bin/tsc -p tsconfig.json --noEmit

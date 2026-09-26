@@ -86,9 +86,14 @@ class BridgeClientTests(unittest.TestCase):
         result = BridgeClient(self.root, cli_path=self.cli).upload_review_proxy(
             self.root / "shot.blend",
             media,
+            frame_rate="24000/1001",
+            start_frame=1001,
         )
         self.assertIn("review-proxy", result["args"])
         self.assertIn("--media", result["args"])
+        self.assertIn("--frame-rate", result["args"])
+        self.assertIn("24000/1001", result["args"])
+        self.assertIn("--start-frame", result["args"])
 
     def test_rejects_unsupported_protocol(self):
         self.cli.write_text(

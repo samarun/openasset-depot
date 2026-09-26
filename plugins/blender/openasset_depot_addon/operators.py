@@ -213,7 +213,13 @@ class OPENASSET_OT_submit(bpy.types.Operator):
                             result["preview_warning"] = str(error)
                     if review_proxy_path:
                         try:
-                            bridge.upload_review_proxy(path, review_proxy_path)
+                            frame_rate, start_frame = runtime.scene_review_timebase()
+                            bridge.upload_review_proxy(
+                                path,
+                                review_proxy_path,
+                                frame_rate=frame_rate,
+                                start_frame=start_frame,
+                            )
                             result["review_proxy_uploaded"] = True
                         except Exception as error:
                             result["review_proxy_warning"] = str(error)

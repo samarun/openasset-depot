@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockFiles } from "../data/mockData";
 import type { ReviewComment } from "../types/domain";
-import { ReviewViewer, reviewPlayerFileName } from "./ReviewViewer";
+import { frameAtTime, ReviewViewer, reviewFrameRate, reviewPlayerFileName } from "./ReviewViewer";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -13,6 +13,20 @@ describe("ReviewViewer", () => {
     expect(reviewPlayerFileName("AnimatedHero.fbx", "model/gltf-binary")).toBe("review.glb");
     expect(reviewPlayerFileName("AnimatedHero.glb", "application/vnd.autodesk.fbx")).toBe("review.fbx");
     expect(reviewPlayerFileName("AnimatedHero.glb", "application/octet-stream")).toBe("AnimatedHero.glb");
+  });
+
+  it("uses exact proxy timebase metadata and never assumes 24 fps", () => {
+    const frameRate = reviewFrameRate({
+      blob: new Blob(),
+      contentType: "model/gltf-binary",
+      source: "asset",
+      frameRateNumerator: 24_000,
+      frameRateDenominator: 1_001,
+      startFrame: 1_001,
+    });
+    expect(frameRate).toBeCloseTo(23.976, 3);
+    expect(frameAtTime(1_000, frameRate, 1_001)).toBe(1_025);
+    expect(frameAtTime(1_000, undefined, 0)).toBeUndefined();
   });
 
   it("opens revision feedback and posts a comment", async () => {

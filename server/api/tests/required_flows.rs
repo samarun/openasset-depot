@@ -180,6 +180,21 @@ struct ReviewCommentEntry {
 }
 
 #[derive(Debug, Deserialize)]
+struct UploadSessionEntry {
+    upload_id: Uuid,
+    received_bytes: i64,
+    purpose: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReviewProxyEntry {
+    blob_hash: String,
+    frame_rate_numerator: Option<i32>,
+    frame_rate_denominator: Option<i32>,
+    start_frame: Option<i32>,
+}
+
+#[derive(Debug, Deserialize)]
 struct HistoryEntry {
     revision_number: i32,
     action: String,
@@ -776,17 +791,57 @@ async fn revision_review_proxy_comments_annotations_and_ranges_round_trip() {
         ("path", path.to_string()),
         ("revision_number", "1".to_string()),
     ];
-    let proxy_upload = api
+    let upload_session: UploadSessionEntry = authed_post(
+        &api,
+        &project.alice,
+        "/api/uploads",
+        serde_json::json!({
+            "workspace_id": project.alice_workspace,
+            "path": path,
+            "purpose": "review_proxy",
+            "size_bytes": 16
+        }),
+    )
+    .await;
+    assert_eq!(upload_session.purpose, "review_proxy");
+    assert_eq!(upload_session.received_bytes, 0);
+    let proxy_chunk = api
         .client
-        .post(api.url("/api/reviews/proxy"))
+        .post(api.url(&format!("/api/uploads/{}", upload_session.upload_id)))
         .bearer_auth(&project.alice.token)
-        .query(&target)
-        .header("content-type", "model/gltf-binary")
+        .header("x-upload-offset", "0")
         .body(b"glb-review-proxy".to_vec())
         .send()
         .await
-        .expect("review proxy upload failed");
-    assert_success(proxy_upload).await;
+        .expect("review proxy chunk upload failed");
+    assert_success(proxy_chunk).await;
+    let _: serde_json::Value = authed_post(
+        &api,
+        &project.alice,
+        &format!("/api/uploads/{}/finalize", upload_session.upload_id),
+        serde_json::json!({}),
+    )
+    .await;
+    let proxy: ReviewProxyEntry = authed_post(
+        &api,
+        &project.alice,
+        "/api/reviews/proxy/attach",
+        serde_json::json!({
+            "workspace_id": project.alice_workspace,
+            "path": path,
+            "revision_number": 1,
+            "upload_id": upload_session.upload_id,
+            "content_type": "model/gltf-binary",
+            "frame_rate_numerator": 24000,
+            "frame_rate_denominator": 1001,
+            "start_frame": 1001
+        }),
+    )
+    .await;
+    assert!(!proxy.blob_hash.is_empty());
+    assert_eq!(proxy.frame_rate_numerator, Some(24_000));
+    assert_eq!(proxy.frame_rate_denominator, Some(1_001));
+    assert_eq!(proxy.start_frame, Some(1_001));
 
     let comment: ReviewCommentEntry = authed_post(
         &api,
@@ -849,6 +904,15 @@ async fn revision_review_proxy_comments_annotations_and_ranges_round_trip() {
         .expect("review proxy range download failed");
     assert_eq!(proxy_download.status(), StatusCode::PARTIAL_CONTENT);
     assert_eq!(proxy_download.headers()["content-range"], "bytes 1-3/16");
+    assert_eq!(
+        proxy_download.headers()["x-review-frame-rate-numerator"],
+        "24000"
+    );
+    assert_eq!(
+        proxy_download.headers()["x-review-frame-rate-denominator"],
+        "1001"
+    );
+    assert_eq!(proxy_download.headers()["x-review-start-frame"], "1001");
     assert_eq!(proxy_download.bytes().await.unwrap(), b"lb-".as_slice());
 
     let plan: Vec<SyncPlanEntry> = authed_post(
@@ -862,6 +926,34 @@ async fn revision_review_proxy_comments_annotations_and_ranges_round_trip() {
     )
     .await;
     assert!(plan[0].review_proxy_available);
+}
+
+#[tokio::test]
+#[ignore = "requires running OpenAsset Depot API and PostgreSQL"]
+async fn upload_purposes_isolate_content_and_review_proxy_bytes() {
+    let api = api();
+    let project = setup_project(&api, "private_upload_sessions").await;
+    let content_request = serde_json::json!({
+        "workspace_id": project.alice_workspace,
+        "path": "Scenes/Shared.blend",
+        "purpose": "content",
+        "size_bytes": 4
+    });
+    let review_request = serde_json::json!({
+        "workspace_id": project.alice_workspace,
+        "path": "Scenes/Shared.blend",
+        "purpose": "review_proxy",
+        "size_bytes": 4
+    });
+
+    let content: UploadSessionEntry =
+        authed_post(&api, &project.alice, "/api/uploads", content_request).await;
+    let review: UploadSessionEntry =
+        authed_post(&api, &project.alice, "/api/uploads", review_request).await;
+
+    assert_ne!(content.upload_id, review.upload_id);
+    assert_eq!(content.purpose, "content");
+    assert_eq!(review.purpose, "review_proxy");
 }
 
 #[tokio::test]
